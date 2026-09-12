@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Secrets and local data - never commit
+.env
+secret.key
+*.db
+*.db-wal
+*.db-shm
+probe.json
+takeout/
+data/
+.hypothesis/
+.coverage

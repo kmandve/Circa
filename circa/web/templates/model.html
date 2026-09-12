@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% set page = 'model' %}
+{% from "partials/icons.html" import icon %}
+{% block content %}
+
+<h1>Under the hood</h1>
+<p class="lede">What the estimate is built from, and how much of it to believe.</p>
+
+<div class="banner warn">{{ icon('info', 18) }}
+  <div><strong>This is a model of your body clock, not a measurement of it.</strong>
+  The Fitbit Air has no light sensor and reports skin temperature only once a night, so
+  the two strongest laboratory markers are never directly observed. Studies of similar
+  wearables land within roughly 40&ndash;60 minutes of a real melatonin reading in regular
+  sleepers, and much further out during travel or shift work. Circa reports that floor
+  explicitly rather than hiding it.</div></div>
+
+{% if not phase %}
+<div class="banner info">{{ icon('clock', 18) }}<div>No estimate has been computed yet.</div></div>
+{% else %}
+
+<h2>Where the uncertainty comes from</h2>
+<div class="card">
+  <table>
+    <tr><td class="dim">The filter&rsquo;s own spread</td>
+        <td class="num">{{ filter.get('filter_sd_minutes','—') }} min</td>
+        <td class="dim" style="font-size:.82rem">what the model believes about itself</td></tr>
+    <tr><td class="dim">Model adequacy</td>
+        <td class="num">{{ filter.get('model_adequacy_sd_minutes','—') }} min</td>
+        <td class="dim" style="font-size:.82rem">the structural gap between an oscillator and real physiology — more data never removes this</td></tr>
+    <tr><td><strong>Reported</strong></td>
+        <td class="num"><strong>{{ phase.phase_sd_minutes|round(0)|int }} min</strong></td>
+        <td class="dim" style="font-size:.82rem">the two combined</td></tr>
+  </table>
+</div>
+
+<h2>Confidence breakdown</h2>
+<div class="card">
+  {% for label, key, note in [
+      ('Interval width', 'q_posterior', 'how tight the estimate is'),
+      ('Data coverage', 'q_coverage', 'how much the watch actually recorded'),
+      ('Channel agreement', 'q_agreement', 'whether independent signals agree'),
+      ('Normal conditions', 'q_ood', 'no travel, illness or disrupted nights')] %}
+  {% set v = confidence.get(key) %}
+  <div style="display:flex;align-items:center;gap:.9rem;padding:.5rem 0">
+    <div style="width:10rem;font-size:.88rem">{{ label }}</div>
+    <div class="track" style="flex:1"><i style="width:{{ ((v or 0) * 100)|round(0)|int }}%"></i></div>
+    <div class="num dim" style="width:2.8rem;text-align:right;font-size:.85rem">{{ v if v is not none else '—' }}</div>
+  </div>
+  {% endfor %}
+  <p class="hint" style="margin-top:.8rem">
+    Multiplied together. Nights set a ceiling on the confidence level but never raise it
+    on their own — poor coverage, disagreeing signals or an unusual day pull it back down.
+  </p>
+  {% if confidence.get('ood_flags') %}
+  <div style="margin-top:.6rem;color:var(--warn);font-size:.85rem">
+    {{ icon('alert', 13) }} {{ confidence.ood_flags|join(', ')|replace('_',' ') }}
+  </div>
+  {% endif %}
+</div>
+
+<h2>Signals</h2>
+{% for name, ch in channels.items() %}
+<div class="card" style="margin-bottom:.7rem">
+  <div class="label" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;
+       color:var(--text-dim);font-weight:640;margin-bottom:.6rem">
+    {% if name == 'sleep' %}{{ icon('moon', 12) }} Sleep timing
+    {% else %}{{ icon('activity', 12) }} Heart rate{% endif %}
+  </div>
+  <table>
+    <tr><td class="dim">Says melatonin rises at</td>
+        <td class="num">{{ ch.mu_hours|clock_hours }}</td></tr>
+    <tr><td class="dim">How strongly it says it</td><td class="num">κ {{ ch.kappa }}</td></tr>
+    {% if name == 'sleep' %}
+    <tr><td class="dim">Nights used</td>
+        <td class="num">{{ ch.n_nights }} <span class="dim">({{ ch.n_free_nights }} alarm-free)</span></td></tr>
+    {% else %}
+    <tr><td class="dim">Rhythm size</td><td class="num">{{ ch.amplitude_bpm }} bpm</td></tr>
+    <tr><td class="dim">Signal vs noise</td><td class="num">{{ ch.get('amplitude_snr','—') }}</td></tr>
+    {% endif %}
+  </table>
+</div>
+{% else %}
+<div class="banner info">{{ icon('info', 18) }}
+  <div>No signals produced an estimate this run. The heart-rate channel deliberately
+  abstains when it cannot identify a rhythm rather than guessing.</div></div>
+{% endfor %}
+
+<h2>Stability</h2>
+<div class="card">
+  <table>
+    <tr><td class="dim">Estimates recorded</td><td class="num">{{ stability.n }}</td></tr>
+    <tr><td class="dim">Typical night-to-night movement</td>
+        <td class="num">{{ stability.median_nightly_shift_minutes if stability.median_nightly_shift_minutes is not none else '—' }} min</td></tr>
+    <tr><td class="dim">Largest single jump</td>
+        <td class="num">{{ stability.max_nightly_shift_minutes if stability.max_nightly_shift_minutes is not none else '—' }} min</td></tr>
+  </table>
+  <p class="hint" style="margin-top:.7rem">
+    Big swings without a change in your schedule would mean the model is chasing noise —
+    something no accuracy figure on its own would reveal.
+  </p>
+</div>
+
+<h2>Collection</h2>
+<div class="card flush" style="padding:.4rem .3rem">
+  <table>
+    <thead><tr><th>signal</th><th>up to</th><th style="text-align:right">points</th><th>status</th></tr></thead>
+    <tbody>
+    {% for st in sync_states %}
+    <tr>
+      <td class="mono">{{ st.data_type }}</td>
+      <td class="mono dim">{{ st.watermark or '—' }}</td>
+      <td class="num" style="text-align:right">{{ '{:,}'.format(st.ingested) }}</td>
+      <td>{% if st.failures %}<span style="color:var(--bad)" title="{{ st.error }}">{{ st.failures }} failed</span>
+          {% elif st.last_success %}<span style="color:var(--ok)">ok</span>
+          {% else %}<span class="dim">waiting</span>{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="4" class="dim">No sync has run yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<details style="margin-top:1.5rem">
+  <summary style="cursor:pointer;color:var(--text-dim);font-size:.88rem">Raw estimate detail</summary>
+  <div class="card" style="margin-top:.7rem;overflow-x:auto">
+    <pre style="margin:0;font-size:.76rem;color:var(--text-mid)">{{ detail | tojson(indent=2) }}</pre>
+  </div>
+</details>
+{% endif %}
+
+<footer>model {{ model_version }} · {{ '{:,}'.format(raw_points) }} raw records retained
+  · run <code>circa backtest</code> to check it against itself</footer>
+{% endblock %}

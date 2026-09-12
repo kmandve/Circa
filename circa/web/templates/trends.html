@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% set page = 'trends' %}
+{% from "partials/icons.html" import icon %}
+{% block content %}
+
+<h1>Trends</h1>
+<p class="lede">How your sleep timing has moved, and how complete the data behind it is.</p>
+
+{% if sleep_rows|length < 2 %}
+<div class="banner info">{{ icon('moon', 18) }}
+  <div>Two nights are needed before there is a trend to draw. Circa has {{ sleep_rows|length }}.</div></div>
+{% else %}
+
+<h2>{{ icon('bed', 12) }} When you slept</h2>
+<div class="card flush" style="padding:1rem .8rem .4rem">
+  <div id="actogram" class="chart chart-lg"></div>
+  <p class="detail" style="padding:.4rem .5rem .7rem;color:var(--text-dim);font-size:.8rem">
+    Each bar is one night, from falling asleep to waking. Hollow bars are mornings you
+    woke to an alarm — Circa trusts those less, because a wake time set by your calendar
+    says more about your schedule than your body. The amber line is estimated melatonin onset.
+  </p>
+</div>
+
+<div class="grid g2" style="margin-top:.8rem">
+  <div class="card flush" style="padding:1rem .8rem .5rem">
+    <div class="label" style="padding:0 .5rem;font-size:.72rem;text-transform:uppercase;
+         letter-spacing:.08em;color:var(--text-dim);font-weight:600">Hours slept</div>
+    <div id="tst" class="chart" style="height:190px"></div>
+  </div>
+  {% if rhr|length > 2 %}
+  <div class="card flush" style="padding:1rem .8rem .5rem">
+    <div class="label" style="padding:0 .5rem;font-size:.72rem;text-transform:uppercase;
+         letter-spacing:.08em;color:var(--text-dim);font-weight:600">Resting heart rate</div>
+    <div id="rhr" class="chart" style="height:190px"></div>
+  </div>
+  {% endif %}
+</div>
+
+<h2>{{ icon('watch', 12) }} Data coverage — last 30 days</h2>
+<div class="card">
+  <div id="coverage" class="chart" style="height:120px"></div>
+  <p class="detail" style="color:var(--text-dim);font-size:.8rem;margin:.4rem 0 0">
+    How much of each day the watch recorded heart rate. Sustained gaps lower Circa&rsquo;s
+    confidence rather than being quietly ignored.
+  </p>
+</div>
+{% endif %}
+
+<footer>{{ timezone }} · {{ sleep_rows|length }} nights recorded</footer>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script>
+const SLEEP = {{ sleep_rows|tojson }};
+const PHASE = {{ phase_rows|tojson }};
+const RHR   = {{ rhr|tojson }};
+const COV   = {{ coverage|tojson }};
+const css = getComputedStyle(document.documentElement);
+// Same fallback as Today: an undefined variable reads back as "", which
+// ECharts turns into a chart that disappears on hover.
+const C = (n, fallback = '#8A8A93') => css.getPropertyValue(n).trim() || fallback;
+const line = C('--line-soft'), dim = C('--text-dim');
+const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const base = {
+  animationDuration: reduce ? 0 : 500,
+  grid: { left: 6, right: 10, top: 14, bottom: 22, containLabel: true },
+  tooltip: { trigger: 'axis', backgroundColor: C('--surface-2'), borderColor: line,
+             textStyle: { color: C('--text'), fontSize: 12 } },
+  xAxis: { type: 'category', axisLine: { lineStyle: { color: line } },
+           axisTick: { show: false },
+           axisLabel: { color: dim, fontSize: 10, hideOverlap: true,
+                        formatter: v => v.slice(5) } },
+  yAxis: { splitLine: { lineStyle: { color: line, type: 'dashed' } },
+           axisLabel: { color: dim, fontSize: 10 }, axisLine: { show: false },
+           axisTick: { show: false } }
+};
+// Twelve-hour, from a decimal local hour. Shared by the actogram tooltip and
+// its axis so a bar and the tick beside it cannot disagree.
+const ampm = h => h >= 12 ? 'pm' : 'am';
+const hh12 = h => (h % 12) || 12;
+const clockHours = h => {
+  const m = Math.round(((h % 24) + 24) % 24 * 60) % 1440;
+  return hh12(Math.floor(m / 60)) + ':' + String(m % 60).padStart(2, '0') +
+         ampm(Math.floor(m / 60));
+};
+const hourLabel = h => { const x = Math.round(((h % 24) + 24) % 24) % 24;
+                         return hh12(x) + ampm(x); };
+
+const mount = (id, opt) => {
+  const el = document.getElementById(id); if (!el) return;
+  const ch = echarts.init(el); ch.setOption(opt);
+  window.addEventListener('resize', () => ch.resize());
+};
+
+// Actogram. Clock hours are shifted onto an 18:00–42:00 axis so a night that
+// crosses midnight draws as one continuous bar instead of splitting in two.
+(function () {
+  if (!SLEEP.length) return;
+  const shift = h => (h < 12 ? h + 24 : h);
+  const dates = SLEEP.map(r => r.date);
+  const bars = SLEEP.map(r => {
+    const a = shift(r.onset); let b = shift(r.offset);
+    if (b < a) b += 24;
+    return [a, b];
+  });
+  mount('actogram', {
+    ...base,
+    tooltip: { ...base.tooltip, formatter: ps => {
+      const i = ps[0].dataIndex, r = SLEEP[i];
+      return r.date + '<br/>' + clockHours(r.onset) + ' → ' + clockHours(r.offset) +
+             '<br/>' + r.tst.toFixed(1) + 'h asleep' +
+             (r.forced ? '<br/><span style="color:' + C('--warn') + '">alarm wake</span>' : '');
+    }},
+    xAxis: { ...base.xAxis, data: dates },
+    // The axis runs 16:00 -> 42:00 (i.e. 18:00 next day) so a night crossing
+    // midnight is one bar. `interval` is pinned so ticks land on whole hours;
+    // left to itself ECharts picks fractional steps and the labels read
+    // 18:00, 16:00, 11:00, 06:00 - nonsense.
+    yAxis: { ...base.yAxis, min: 16, max: 40, interval: 4,
+      axisLabel: { color: dim, fontSize: 10,
+        formatter: hourLabel } },
+    series: [
+      { name: 'asleep', type: 'custom', renderItem: (p, api) => {
+          const i = api.value(0);
+          const lo = api.coord([i, api.value(1)]), hi = api.coord([i, api.value(2)]);
+          // Cap the width: with only a few nights each category is very wide
+          // and the bars stop reading as an actogram.
+          const w = Math.min(Math.max(api.size([1, 0])[0] * 0.55, 3), 26);
+          const forced = SLEEP[i].forced;
+          return { type: 'rect',
+            shape: { x: lo[0] - w/2, y: hi[1], width: w, height: lo[1] - hi[1], r: 3 },
+            style: { fill: forced ? 'transparent' : 'rgba(139,123,240,.55)',
+                     stroke: C('--sleep'), lineWidth: 1.5 } };
+        },
+        data: bars.map((b, i) => [i, b[0], b[1]]), encode: { x: 0, y: [1, 2] } },
+      { name: 'melatonin onset', type: 'line', symbol: 'circle', symbolSize: 4, smooth: true,
+        lineStyle: { color: C('--light'), width: 1.5 }, itemStyle: { color: C('--light') },
+        connectNulls: true,
+        data: dates.map(d => { const p = PHASE.find(x => x.date === d);
+                               return p && p.dlmo != null ? shift(p.dlmo) : null; }) }
+    ]
+  });
+})();
+
+mount('tst', { ...base,
+  xAxis: { ...base.xAxis, data: SLEEP.map(r => r.date) },
+  yAxis: { ...base.yAxis, type: 'value', axisLabel: { color: dim, fontSize: 10,
+           formatter: '{value}h' } },
+  series: [{ type: 'bar', data: SLEEP.map(r => r.tst), barMaxWidth: 34,
+             itemStyle: { color: C('--sleep'), borderRadius: [4,4,0,0], opacity: .85 } }]
+});
+
+if (RHR.length > 2) mount('rhr', { ...base,
+  xAxis: { ...base.xAxis, data: RHR.map(r => r.date) },
+  yAxis: { ...base.yAxis, type: 'value', scale: true },
+  series: [{ type: 'line', smooth: true, symbol: 'none', data: RHR.map(r => r.value),
+             lineStyle: { color: C('--body'), width: 2.5 },
+             areaStyle: { color: 'rgba(87,214,160,.10)' } }]
+});
+
+mount('coverage', { ...base,
+  grid: { left: 6, right: 10, top: 8, bottom: 20, containLabel: true },
+  tooltip: { ...base.tooltip, formatter: ps =>
+    ps[0].name + '<br/>' + Math.round(ps[0].value * 100) + '% recorded' },
+  xAxis: { ...base.xAxis, data: COV.map(d => d.date) },
+  yAxis: { ...base.yAxis, type: 'value', max: 1, axisLabel: { show: false },
+           splitLine: { show: false } },
+  series: [{ type: 'bar', data: COV.map(d => d.fraction), barMaxWidth: 18,
+             itemStyle: { borderRadius: [3,3,0,0],
+               color: p => p.value >= 0.7 ? C('--body')
+                         : p.value > 0    ? C('--warn') : C('--line') } }]
+});
+</script>
+{% endblock %}

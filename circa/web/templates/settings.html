@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% set page = 'settings' %}
+{% from "partials/icons.html" import icon %}
+
+{% macro num(name, label, hint='', step='1', min='', max='', suffix='') %}
+<div class="field">
+  <div><label for="{{name}}">{{ label }}</label>{% if hint %}<div class="hint">{{ hint }}</div>{% endif %}</div>
+  <div><input type="number" id="{{name}}" name="{{name}}" step="{{step}}"
+       {% if min != '' %}min="{{min}}"{% endif %} {% if max != '' %}max="{{max}}"{% endif %}
+       value="{{ s[name] }}"></div>
+</div>
+{% endmacro %}
+
+{% macro toggle(name, label, hint='') %}
+<div class="field">
+  <div><label for="{{name}}">{{ label }}</label>{% if hint %}<div class="hint">{{ hint }}</div>{% endif %}</div>
+  <div><span class="switch">
+    <input type="checkbox" id="{{name}}" name="{{name}}" {% if s[name] %}checked{% endif %}>
+    <span class="slider"></span>
+  </span></div>
+</div>
+{% endmacro %}
+
+{# An hour of the day. A spinner reading "14" is the last military clock left
+   on the site; the range covers what the model allows, not just the sensible
+   part, so a value set elsewhere still shows as selected. #}
+{% macro hour_choice(name, label, hint='') %}
+<div class="field">
+  <div><label for="{{name}}">{{ label }}</label>{% if hint %}<div class="hint">{{ hint }}</div>{% endif %}</div>
+  <div><select id="{{name}}" name="{{name}}">
+    {% for h in range(0, 24) %}
+    <option value="{{ h }}" {% if s[name] == h %}selected{% endif %}>{{ h|clock_hours }}</option>
+    {% endfor %}
+  </select></div>
+</div>
+{% endmacro %}
+
+{% macro choice(name, label, options, hint='') %}
+<div class="field">
+  <div><label for="{{name}}">{{ label }}</label>{% if hint %}<div class="hint">{{ hint }}</div>{% endif %}</div>
+  <div><select id="{{name}}" name="{{name}}">
+    {% for value, text in options %}
+    <option value="{{ value }}" {% if s[name] == value %}selected{% endif %}>{{ text }}</option>
+    {% endfor %}
+  </select></div>
+</div>
+{% endmacro %}
+
+{% block content %}
+<h1>Settings</h1>
+<p class="lede">Everything Circa does is adjustable here — you should never need to edit code.</p>
+
+{% if request.query_params.get('saved') %}
+<div class="banner ok">{{ icon('check', 18) }}
+  <div>Saved. Hit <strong>Refresh</strong> above to apply them now.</div></div>
+{% endif %}
+
+{% if request.query_params.get('invalid') %}
+<div class="banner warn">{{ icon('alert', 18) }}
+  <div><strong>Not saved.</strong> These are outside the allowed range:
+  {{ request.query_params.get('invalid') }}. Nothing else on this page was
+  changed either — fix them and submit again.</div></div>
+{% endif %}
+
+<form method="post" action="/settings">
+
+<h2>About you</h2>
+<div class="card">
+  {{ choice('chronotype', 'Chronotype', [
+      ('night_owl','Night owl'), ('slight_owl','Slightly late'),
+      ('neutral','Neither'), ('morning','Morning type')],
+      'Your natural leaning. This carries most of the weight in the first two weeks, then your own data takes over.') }}
+  {{ num('target_sleep_hours', 'Sleep you aim for', 'Sets the length of the predicted sleep window.', '0.25', '4', '12') }}
+  {{ hour_choice('forced_wake_before_hour', 'Early-start hour',
+      'A calendar event before this hour marks that morning as an alarm wake, which Circa weighs less when reading your body clock.') }}
+</div>
+
+<h2>What lands on your calendar</h2>
+<div class="card">
+  {{ toggle('enable_focus', 'Focus windows', 'Peak focus, the afternoon dip, and the evening second wind.') }}
+  {{ toggle('enable_sleep_blocks', 'Sleep', 'Melatonin onset, wind-down, and your biological night.') }}
+  {{ toggle('enable_light', 'Light', 'When to seek and avoid bright light — the strongest lever you have on your clock.') }}
+  {{ toggle('enable_wind_down', 'Wind-down reminder') }}
+  {{ toggle('enable_caffeine_cutoff', 'Caffeine cutoff') }}
+  {{ toggle('enable_workout_window', 'Best training window') }}
+  {{ toggle('enable_last_meal', 'Last meal', 'The weakest of these: meal timing shifts your metabolism but barely moves melatonin.') }}
+  {{ toggle('enable_debug_calendar', 'Diagnostics calendar', 'Raw phase estimate and credible interval, for debugging. Off by default.') }}
+</div>
+
+<h2>Behaviour</h2>
+<div class="card">
+  {{ choice('low_confidence_policy', 'When Circa is unsure', [
+      ('wide_blocks','Show wider blocks, labelled honestly'),
+      ('write_nothing','Show nothing at all'),
+      ('robust_only','Only Sleep and Light')],
+      'Applies during cold start, patchy data, travel or illness.') }}
+  {{ choice('notifications', 'Notifications', [
+      ('none','None'), ('actionable','Only time-critical ones'), ('all','Every block')],
+      'Time-critical means morning light, dimming, caffeine cutoff and wind-down.') }}
+  {{ num('notification_minutes_before', 'Notify this early', '', '1', '0', '120') }}
+  {{ num('forecast_horizon_hours', 'Plan ahead', 'Hours of calendar written in advance. 48 keeps things useful even if Circa is offline for a day.', '1', '12', '168') }}
+  {{ num('max_blocks_per_day', 'Most blocks per day', '', '1', '1', '30') }}
+</div>
+
+<h2>What already happened</h2>
+<div class="card">
+  {{ toggle('show_recorded_sleep', 'Record your nights on the calendar',
+     'Writes what your watch actually measured, where it happened. Forecasts are never written into the past — only records are.') }}
+  {{ num('history_days', 'Keep records this far back', 'Days.', '1', '0', '60') }}
+  {{ num('sleep_debt_window_days', 'Sleep debt window',
+     'Days of shortfall to add up. 14 is what the consumer apps use, and roughly how far back recovery sleep still tracks the deficit.', '1', '3', '60') }}
+  {{ num('sleep_debt_payback_fraction', 'Repay this much of the debt each night',
+     'A fraction. 0.25 means a quarter of the outstanding debt is added to tonight, not all of it — a bedtime that clears a fortnight in one go is one nobody keeps.', '0.05', '0', '1') }}
+  {{ num('max_debt_payback_hours', 'Never add more than', 'Hours on top of your target.', '0.25', '0', '4') }}
+</div>
+
+<h2>Timing details</h2>
+<div class="card">
+  {{ num('morning_light_hours', 'Morning light window', 'Hours. Always clipped to when you are predicted to be awake.', '0.5', '0.5', '6') }}
+  {{ num('dim_light_lead_hours', 'Start dimming before melatonin', 'Hours.', '0.5', '0', '6') }}
+  {{ num('wind_down_minutes', 'Wind-down length', 'Minutes.', '15', '15', '180') }}
+  {{ num('caffeine_half_life_hours', 'Your caffeine half-life', 'Hours. Around 5 on average, but genuinely varies between 3 and 7 between people.', '0.5', '2', '10') }}
+  {{ num('caffeine_residual_fraction', 'Caffeine left at bedtime', 'A fraction. 0.25 means the cutoff is set so a quarter of the dose remains.', '0.05', '0.05', '0.9') }}
+  {{ num('last_meal_hours_before_sleep', 'Finish eating before sleep', 'Hours.', '0.5', '0', '8') }}
+  {{ num('min_block_minutes', 'Shortest block', 'Minutes.', '5', '15', '180') }}
+  {{ num('round_to_minutes', 'Round times to', 'Minutes. Also smooths the numbers shown in event descriptions, so tiny changes do not rewrite your calendar.', '5', '1', '60') }}
+</div>
+
+<h2>Right now</h2>
+<div class="card">
+  {{ toggle('travel_mode', 'Travelling', 'Tells Circa its estimate is unreliable — intervals widen and confidence drops until you turn this off.') }}
+  {{ toggle('paused', 'Pause calendar writes', 'Keeps collecting data but stops touching your calendar.') }}
+</div>
+
+<details style="margin-top:2rem">
+  <summary style="cursor:pointer;color:var(--text-dim);font-size:.88rem">Advanced model settings</summary>
+  <div class="card" style="margin-top:.7rem">
+    {{ num('n_particles', 'Particles', 'More particles smooth the estimate. Cheap — cost is dominated by light histories, not this.', '100', '200', '8000') }}
+    {{ num('n_light_samples', 'Light histories', 'The expensive one: each needs its own pass through the oscillator. 10 keeps a full run near 3 seconds.', '1', '4', '200') }}
+    {{ num('sleep_history_days', 'Sleep history used', 'Days.', '1', '7', '120') }}
+    {{ num('hr_window_hours', 'Heart-rate window', 'Hours. Set to 0 to switch the heart-rate channel off entirely.', '1', '0', '168') }}
+    {{ toggle('enable_hrv_channel', 'Use HRV as a phase signal', 'Off by default — it has not yet earned its place against the alternatives.') }}
+    {{ num('high_alertness_z', 'High-alertness threshold', 'Standard deviations.', '0.05') }}
+    {{ num('low_alertness_z', 'Low-alertness threshold', 'Standard deviations.', '0.05') }}
+  </div>
+</details>
+
+<div style="margin-top:1.75rem;display:flex;gap:.6rem;align-items:center">
+  <button type="submit">{{ icon('check', 15) }} Save settings</button>
+  <span class="dim" style="font-size:.83rem">Applied on the next refresh</span>
+</div>
+</form>
+
+<h2>Set outside the app</h2>
+<div class="card">
+  <table>
+    <tr><td class="dim">Timezone</td><td class="mono">{{ config.timezone }}</td></tr>
+    <tr><td class="dim">Coordinates</td><td class="mono">{{ config.latitude }}, {{ config.longitude }}</td></tr>
+    <tr><td class="dim">Data directory</td><td class="mono">{{ config.data_dir }}</td></tr>
+    <tr><td class="dim">Checks for new data</td><td class="mono">every {{ config.poll_interval_minutes }} min</td></tr>
+  </table>
+  <p class="hint" style="margin-top:.7rem">
+    Coordinates are a fixed setting used only to work out where the sun is — Circa never
+    reads your location. Change these in <code>.env</code>.
+  </p>
+</div>
+{% endblock %}

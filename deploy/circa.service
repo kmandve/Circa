@@ -1,0 +1,37 @@
+[Unit]
+Description=Circa - circadian phase engine
+Documentation=https://github.com/kmandve/Circa
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=circa
+Group=circa
+WorkingDirectory=/opt/circa
+EnvironmentFile=/etc/circa/circa.env
+ExecStart=/opt/circa/.venv/bin/circa serve
+Restart=always
+RestartSec=15
+
+# numpy on a 1 GB e2-micro is tight; the swapfile created by setup-vm.sh is
+# what keeps the modelling phases from being OOM-killed.
+MemoryMax=850M
+
+# Hardening. The service needs exactly two writable paths.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/circa /var/log/circa
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=append:/var/log/circa/circa.log
+StandardError=append:/var/log/circa/circa.log
+
+[Install]
+WantedBy=multi-user.target

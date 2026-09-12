@@ -1,0 +1,358 @@
+{% extends "base.html" %}
+{% set page = 'today' %}
+{% from "partials/icons.html" import icon %}
+{% block content %}
+
+{% if not authenticated %}
+<div class="banner bad">{{ icon('alert', 18) }}
+  <div><strong>Not connected.</strong> Run <code>circa auth</code> to authorise against
+  your Google account. Nothing is being collected until you do.</div></div>
+{% elif testing_status_suspected %}
+<div class="banner warn">{{ icon('alert', 18) }}
+  <div><strong>Your sign-in is about to expire.</strong> The Google consent screen is
+  probably still in &ldquo;Testing&rdquo;, which kills access after 7 days. Publish the app
+  to &ldquo;In production&rdquo;, then re-run <code>circa auth</code>.</div></div>
+{% endif %}
+
+{% if authenticated and not calendar_colours_allowed %}
+<div class="banner info">{{ icon('info', 18) }}
+  <div><strong>Calendar colours need one more permission.</strong> Circa now paints its
+  own calendars a custom colour instead of picking from Google&rsquo;s twenty-four.
+  Re-run <code>circa auth</code> once and the palette applies on the next sync.</div></div>
+{% endif %}
+
+{% if paused %}
+<div class="banner warn">{{ icon('info', 18) }}
+  <div><strong>Paused.</strong> Circa is still collecting data but not writing to your
+  calendar. <a href="/settings">Resume in Settings</a>.</div></div>
+{% endif %}
+
+{% if device_sync_age_minutes is not none and device_sync_age_minutes > 720 %}
+<div class="banner warn">{{ icon('watch', 18) }}
+  <div><strong>Your watch hasn&rsquo;t synced in {{ (device_sync_age_minutes/60)|round(0)|int }} hours.</strong>
+  Data only reaches Circa after the Fitbit syncs to your phone — open the Google Health
+  app with the watch nearby.</div></div>
+{% endif %}
+
+{% if not has_phase %}
+<h1>Getting to know you</h1>
+<p class="lede">Circa needs at least one full night before it can estimate anything.
+  It has {{ nights }} so far.</p>
+<div class="banner info">{{ icon('moon', 18) }}
+  <div>Wear the watch to sleep and check back tomorrow. Nothing else is needed.</div></div>
+{% else %}
+
+<!-- ── right now ───────────────────────────────────────────────── -->
+<section class="now reveal" style="--d:0ms">
+  <div class="now-head">
+    <span class="kicker">{{ now_kicker }}{% if now_until %} · {{ now_until }}{% endif %}</span>
+  </div>
+  <p class="headline">{{ now_headline }}</p>
+  {% if now_detail %}<p class="detail">{{ now_detail }}</p>{% endif %}
+  {% if now_progress is not none %}
+  <div class="track" role="progressbar" aria-valuenow="{{ now_progress }}"
+       aria-valuemin="0" aria-valuemax="100"
+       aria-label="Progress through the current window">
+    <span class="fill" style="--pct:{{ now_progress }}%"></span>
+  </div>
+  {% endif %}
+</section>
+
+<!-- ── energy ──────────────────────────────────────────────────── -->
+<div class="card flush chart-card reveal" style="--d:60ms">
+  <div id="curve" class="chart chart-lg"><div class="loading">Drawing your energy curve…</div></div>
+  <p class="chart-note">Predicted energy through the next day. Shaded stretches
+    are sleep.</p>
+</div>
+
+<!-- ── the three numbers ───────────────────────────────────────── -->
+<div class="grid g3">
+  <div class="card stat reveal" style="--d:120ms">
+    <div class="label">{{ icon('moon', 13) }} Last night</div>
+    <div class="value num">{{ last_night or '—' }}</div>
+    <div class="note">
+      {% if last_night_delta is not none and last_night_delta < -0.25 %}
+        {{ (last_night_delta * -60)|round|int }} min short of your {{ target_sleep_words }} target
+      {% elif last_night_delta is not none and last_night_delta > 0.25 %}
+        {{ (last_night_delta * 60)|round|int }} min above your {{ target_sleep_words }} target
+      {% elif last_night %}On your {{ target_sleep_words }} target
+      {% else %}No sleep recorded yet{% endif %}
+    </div>
+  </div>
+  <div class="card stat debt-{{ debt_words.tone }} reveal" style="--d:180ms">
+    <div class="label">{{ icon('gauge', 13) }} Sleep debt</div>
+    <div class="value num">{{ debt_words.value }}</div>
+    <div class="note">{{ debt_words.line }}</div>
+  </div>
+  <div class="card stat reveal" style="--d:240ms">
+    <div class="label">{{ icon('zap', 13) }} Today&rsquo;s ceiling</div>
+    <div class="value num">{{ energy_peak if energy_peak is not none else '—' }}{% if energy_peak is not none %}<span class="unit">/100</span>{% endif %}</div>
+    <div class="note">The best your energy gets today. A day after a short night
+      genuinely sits lower.</div>
+  </div>
+</div>
+
+<!-- ── what's coming ───────────────────────────────────────────── -->
+<h2 class="reveal" style="--d:300ms">Your day</h2>
+{% if blocks %}
+<div class="card flush timeline reveal" style="--d:320ms">
+  {% for b in blocks %}
+  <div class="tl-item{% if b.active %} active{% endif %}{% if b.past %} past{% endif %}"
+       data-cat="{{ b.category }}" style="--i:{{ loop.index0 }}">
+    <span class="tl-rail"></span>
+    <div class="tl-time num">
+      {{ b.start }}<span class="day">{{ b.day }} · {{ b.end }}</span>
+    </div>
+    <div class="tl-body">
+      <div class="tl-title">
+        {{ b.label }}
+        {% if b.active %}<span class="chip live">now</span>
+        {% elif b.recorded %}<span class="chip">recorded</span>{% endif %}
+      </div>
+      <details class="why"><summary>Why</summary>
+        <div class="body">{{ b.description }}</div>
+      </details>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+<p class="note dim foot-note">
+  {% if blocks_beyond %}{{ blocks_beyond }} more over the next two days, on your calendar.
+  {% else %}On {{ n_calendars }} separate Google Calendars, so you can hide any of them
+  from your calendar sidebar.{% endif %}
+</p>
+{% else %}
+<div class="banner info">{{ icon('info', 18) }}
+  <div>Nothing scheduled yet. Circa writes to your calendar once it has enough to
+  stand behind.</div></div>
+{% endif %}
+
+<!-- ── everything else, folded away ────────────────────────────── -->
+<details class="advanced reveal" style="--d:380ms">
+  <summary>
+    <span>{{ icon('gauge', 14) }} Under the hood</span>
+    <span class="dim">{{ nights }} night{{ '' if nights == 1 else 's' }} · {{ tier_name }}</span>
+  </summary>
+  <div class="advanced-body">
+    <div class="grid g3">
+      <div class="mini">
+        <div class="label">Melatonin rises</div>
+        <div class="value num">{{ dlmo }}</div>
+        <div class="note">Somewhere between {{ ci_low }} and {{ ci_high }}</div>
+      </div>
+      <div class="mini">
+        <div class="label">Lowest point</div>
+        <div class="value num">{{ cbtmin }}</div>
+        <div class="note">The deepest part of your biological night</div>
+      </div>
+      <div class="mini">
+        <div class="label">Your day length</div>
+        <div class="value num">{{ '%.1f'|format(tau) if tau else '—' }}<span class="unit">h</span></div>
+        <div class="note">
+          {% if tau and tau > 24.3 %}Longer than 24h — you naturally drift later
+          {% elif tau and tau < 24.1 %}Shorter than 24h — you naturally drift earlier
+          {% else %}Close to 24h{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="track labelled" title="{{ nights }} of {{ nights + (nights_to_next or 0) }} nights">
+      <span class="fill" style="--pct:{{ tier_progress }}%"></span>
+    </div>
+    <p class="note dim">
+      <strong>{{ tier_name|capitalize }}.</strong>
+      {% if nights_to_next %}{{ nights_to_next }} more night{{ '' if nights_to_next == 1 else 's' }}
+      until the next level — everything is already shown, it just gets narrower.
+      {% else %}Fully personalised.{% endif %}
+      Timing is accurate to about &plusmn;{{ sd_minutes or '—' }} minutes.
+      <a href="/model">See how this is built &rsaquo;</a>
+    </p>
+    {% if ood_flags %}
+    <p class="note warn-text">Unusual conditions detected: {{ ood_flags|join(', ') }}.
+      Circa widens its estimates rather than pretending to be sure.</p>
+    {% endif %}
+  </div>
+</details>
+
+<footer>
+  {{ timezone }}
+  {% if device_sync_age_minutes is not none %}
+    · watch synced {% if device_sync_age_minutes < 90 %}{{ device_sync_age_minutes }} min{% else %}{{ (device_sync_age_minutes/60)|round(0)|int }}h{% endif %} ago
+  {% endif %}
+  {% if forecast_age_minutes is not none %}
+    · forecast {% if forecast_age_minutes < 90 %}{{ forecast_age_minutes }} min{% else %}{{ (forecast_age_minutes/60)|round(0)|int }}h{% endif %} old
+  {% endif %}
+</footer>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script>
+const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ── the energy curve ─────────────────────────────────────────── */
+async function draw() {
+  const el = document.getElementById('curve');
+  if (!el) return;
+  let data;
+  try { data = await (await fetch('/api/curve')).json(); }
+  catch (e) { el.innerHTML = '<div class="loading">Could not load the curve.</div>'; return; }
+  if (!data.available) {
+    el.innerHTML = '<div class="loading">' + (data.reason || 'Not enough data yet.') + '</div>';
+    if (data.computing) setTimeout(draw, 4000);
+    return;
+  }
+  el.innerHTML = '';
+  const css  = getComputedStyle(document.documentElement);
+  // A CSS variable that does not exist reads back as "". ECharts accepts that
+  // at first paint and falls back to its own palette, then derives an emphasis
+  // colour from it on hover and draws nothing - the curve vanished the moment
+  // you pointed at it. A visible wrong grey is a far better failure.
+  const C    = (n, fallback = '#8A8A93') => css.getPropertyValue(n).trim() || fallback;
+  const line = C('--line-soft'), dim = C('--text-dim');
+  // The accent *is* energy - that is what it is reserved for. There is no
+  // separate --energy, which is how this went wrong in the first place.
+  const energy = C('--accent'), sleep = C('--sleep');
+
+  const t  = data.points.map(p => p.t);
+  const e  = data.points.map(p => p.e);
+  const lo = data.points.map(p => p.lo);
+  const band = data.points.map(p => +(p.hi - p.lo).toFixed(1));
+
+  // Shade contiguous predicted-sleep runs.
+  const marks = []; let s = null;
+  data.points.forEach((p, i) => {
+    if (p.asleep && s === null) s = p.t;
+    if ((!p.asleep || i === data.points.length - 1) && s !== null) {
+      marks.push([{ xAxis: s }, { xAxis: p.t }]); s = null;
+    }
+  });
+
+  const chart = echarts.init(el);
+  const OFFSET = (data.utc_offset_seconds || 0) * 1000;
+  // The marker is the user's wall clock, on the same shifted convention as the
+  // points, and it is redrawn on a timer - a line labelled "now" that was
+  // actually drawn when the page loaded is worse than no line at all.
+  const nowMark = () => new Date(Date.now() + OFFSET);
+  // Twelve-hour, to match every server-rendered time on the page. Read the
+  // clock off the *UTC* fields: the points are local times wearing a "+00:00"
+  // label, so getHours() would localise them a second time.
+  const ampm = h => h >= 12 ? 'pm' : 'am';
+  const hh12 = h => (h % 12) || 12;
+  const clock = d => hh12(d.getUTCHours()) + ':' +
+                     String(d.getUTCMinutes()).padStart(2,'0') + ampm(d.getUTCHours());
+  const hourLabel = d => hh12(d.getUTCHours()) + ampm(d.getUTCHours());
+
+  const markLine = () => ({
+    silent: true, symbol: 'none',
+    lineStyle: { color: C('--accent'), width: 1, type: [4, 4], opacity: .75 },
+    label: {
+      show: true, formatter: clock(nowMark()), color: C('--accent'), fontSize: 10,
+      position: 'end', distance: 5, rotate: 0,
+      padding: [2, 4], backgroundColor: C('--bg'), borderRadius: 3
+    },
+    data: [{ xAxis: nowMark().toISOString() }]
+  });
+
+  chart.setOption({
+    useUTC: true,
+    animationDuration: REDUCED ? 0 : 650,
+    animationEasing: 'cubicOut',
+    grid: { left: 4, right: 10, top: 16, bottom: 22, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: C('--surface-2'), borderColor: C('--line'),
+      textStyle: { color: C('--text'), fontSize: 12 },
+      // Default is a stark white; on this ground it shouts louder than the
+      // curve it is pointing at.
+      axisPointer: { lineStyle: { color: C('--text-dim'), width: 1, type: [3, 3] } },
+      formatter: ps => {
+        const p = ps.find(x => x.seriesName === 'Energy'); if (!p) return '';
+        const d = new Date(p.value[0]); const v = p.value[1];
+        const word = v >= 80 ? 'High' : v >= 65 ? 'Moderate' : v >= 50 ? 'Low' : 'Very low';
+        return clock(d) + ' &middot; <b>' + word + '</b> ' + Math.round(v);
+      }
+    },
+    xAxis: {
+      type: 'time', axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { show: false },
+      axisLabel: {
+        color: dim, fontSize: 10, hideOverlap: true,
+        formatter: v => {
+          const d = new Date(v);
+          return d.getUTCHours() === 0
+            ? d.toLocaleDateString([], { weekday: 'short', timeZone: 'UTC' })
+            : hourLabel(d);
+        }
+      }
+    },
+    yAxis: {
+      type: 'value', min: 0, max: 100, interval: 50,
+      splitLine: { lineStyle: { color: C('--line-soft') } },
+      axisLabel: { color: dim, fontSize: 10 },
+      axisTick: { show: false }, axisLine: { show: false }
+    },
+    series: [
+      { name: 'lo', type: 'line', data: t.map((x,i)=>[x,lo[i]]), stack: 'band',
+        lineStyle: { opacity: 0 }, symbol: 'none', silent: true },
+      { name: 'band', type: 'line', data: t.map((x,i)=>[x,band[i]]), stack: 'band',
+        lineStyle: { opacity: 0 }, symbol: 'none', silent: true,
+        areaStyle: { color: energy, opacity: .07 } },
+      { id: 'energy', name: 'Energy', type: 'line', data: t.map((x,i)=>[x,e[i]]),
+        smooth: .35, symbol: 'none',
+        lineStyle: { width: 1.75, color: energy },
+        markArea: { silent: true, itemStyle: { color: sleep, opacity: .07 }, data: marks },
+        markLine: markLine()
+      }
+    ]
+  });
+
+  // Tick the marker, and re-fetch occasionally so the window keeps up with the
+  // clock on a page left open. This is not decoration, so it runs regardless of
+  // the motion preference: a line labelled "now" that stopped at page load is
+  // worse than no line at all. `id` rather than `name` because a partial
+  // setOption matches series by id, and matching the wrong one would move the
+  // marker onto the invisible band series.
+  setInterval(() => {
+    chart.setOption({ series: [{ id: 'energy', markLine: markLine() }] });
+  }, 30000);
+  setTimeout(draw, 300000);
+  window.addEventListener('resize', () => chart.resize());
+}
+draw();
+
+/* ── refresh without thrashing the page ───────────────────────── */
+(function refreshWatch() {
+  const form = document.getElementById('refresh-form');
+  const RENDERED = {{ forecast_computed_at|tojson }};
+  if (!form) return;
+
+  let polling = false;
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    if (polling) return;
+    polling = true;
+    form.classList.add('busy');
+    try { await fetch('/run', { method: 'POST' }); } catch (e) { /* poll anyway */ }
+
+    // Poll for a *changed* forecast rather than reloading on a timer. The old
+    // version reloaded every six seconds for as long as a run took, which with
+    // a calendar push is half a minute of the page thrashing under you.
+    const deadline = Date.now() + 120000;
+    (async function check() {
+      if (Date.now() > deadline) { form.classList.remove('busy'); polling = false; return; }
+      try {
+        const s = await (await fetch('/api/status')).json();
+        if (s.forecast_computed_at && s.forecast_computed_at !== RENDERED) {
+          location.reload();                      // once, and only once
+          return;
+        }
+      } catch (e) { /* keep waiting */ }
+      setTimeout(check, 2000);
+    })();
+  });
+})();
+</script>
+{% endblock %}

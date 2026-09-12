@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0A0C13">
+<title>{% block title %}Circa{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%23FF9E7D'/><circle cx='21' cy='12' r='10' fill='%230A0C13'/></svg>">
+{% block head %}{% endblock %}
+</head>
+<body>
+<div class="wrap">
+{% from "partials/icons.html" import icon %}
+<nav>
+  <a class="brand" href="/"><span class="dot"></span>Circa</a>
+  <a class="tab" href="/"         {% if page=='today'    %}aria-current="page"{% endif %}>Today</a>
+  <a class="tab" href="/trends"   {% if page=='trends'   %}aria-current="page"{% endif %}>Trends</a>
+  <a class="tab" href="/model"    {% if page=='model'    %}aria-current="page"{% endif %}>Details</a>
+  <a class="tab" href="/settings" {% if page=='settings' %}aria-current="page"{% endif %}>Settings</a>
+  <span class="spacer"></span>
+  <form method="post" action="/run" id="refresh-form">
+    <button class="ghost" type="submit" title="Recompute now">
+      {{ icon('refresh', 14) }}<span class="hide-sm">Refresh</span>
+    </button>
+  </form>
+</nav>
+{% block content %}{% endblock %}
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

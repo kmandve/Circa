@@ -63,7 +63,12 @@ CIRCA_WEB_PORT=8720
 # Fill these in before starting the service - see docs/SETUP.md.
 # Latitude and longitude are used only for the solar-elevation ceiling in the
 # light proxy. Your nearest city is precise enough; Circa never reads a device
-# location. `circa doctor` refuses to pass while these are still the example.
+# location. 'circa doctor' warns while these are still the example values.
+#
+# No backticks below this line: ENVEOF is an unquoted heredoc so that DATA_DIR
+# and SECRET expand, which means backticks are command substitution - and this
+# heredoc is written by a script running as root. A comment mentioning
+# 'circa doctor' in backticks was silently executed on the first real run.
 CIRCA_GOOGLE_CLIENT_ID=
 CIRCA_GOOGLE_CLIENT_SECRET=
 CIRCA_TIMEZONE=Europe/London

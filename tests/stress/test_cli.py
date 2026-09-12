@@ -133,3 +133,29 @@ def test_every_documented_install_command_includes_the_modelling_stack():
             if "-e" not in line:
                 continue
             assert "science" in line, f"{name}: {line.strip()}"
+
+
+def test_the_vm_setup_script_has_no_command_substitution_in_its_heredocs():
+    """`ENVEOF` is deliberately unquoted so $DATA_DIR and $SECRET expand - which
+    means backticks and $(...) inside it are executed too, by a script running
+    as root. A comment mentioning 'circa doctor' in backticks was run for real
+    on the first deployment; it was harmless, and the next one might not be.
+    """
+    import re
+    from pathlib import Path
+
+    script = (
+        Path(__file__).resolve().parents[2] / "deploy" / "setup-vm.sh"
+    ).read_text()
+
+    # Every heredoc body, paired with whether its delimiter was quoted. A quoted
+    # delimiter ('LOGEOF') disables expansion, so those bodies are safe.
+    pattern = re.compile(r"<<(?P<q>'?)(?P<tag>\w+)(?P=q)\n(?P<body>.*?)\n(?P=tag)\n", re.S)
+    offenders = []
+    for m in pattern.finditer(script):
+        if m.group("q"):
+            continue                      # quoted delimiter: nothing expands
+        for line in m.group("body").splitlines():
+            if "`" in line or "$(" in line:
+                offenders.append(f"{m.group('tag')}: {line.strip()}")
+    assert not offenders, offenders

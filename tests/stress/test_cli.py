@@ -159,3 +159,31 @@ def test_the_vm_setup_script_has_no_command_substitution_in_its_heredocs():
             if "`" in line or "$(" in line:
                 offenders.append(f"{m.group('tag')}: {line.strip()}")
     assert not offenders, offenders
+
+
+def test_config_reads_the_deployed_env_file_as_well_as_a_local_one(tmp_path, monkeypatch):
+    """On the VM the config lives at /etc/circa/circa.env, which systemd reads
+    itself - so `circa auth` and `circa doctor` run by hand saw no client id, no
+    timezone and no coordinates, and called a correctly configured machine
+    broken. Both paths are consulted now, with the local checkout winning."""
+    from circa.config import Settings
+
+    assert "/etc/circa/circa.env" in Settings.model_config["env_file"]
+    assert ".env" in Settings.model_config["env_file"]
+    # Local last, so working in a checkout still overrides a deployed file.
+    assert list(Settings.model_config["env_file"]).index(".env") == 1
+
+
+def test_a_local_env_file_overrides_the_deployed_one(tmp_path, monkeypatch):
+    from circa.config import Settings
+
+    deployed = tmp_path / "circa.env"
+    deployed.write_text("CIRCA_TIMEZONE=Europe/London\nCIRCA_LATITUDE=51.5072\n")
+    local = tmp_path / ".env"
+    local.write_text("CIRCA_TIMEZONE=America/Chicago\n")
+
+    for key in ("CIRCA_TIMEZONE", "CIRCA_LATITUDE"):
+        monkeypatch.delenv(key, raising=False)
+    s = Settings(_env_file=(str(deployed), str(local)))
+    assert s.timezone == "America/Chicago", "local .env should win"
+    assert s.latitude == 51.5072, "values only in the deployed file still apply"

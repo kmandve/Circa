@@ -27,7 +27,13 @@ def _default_data_dir() -> Path:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="CIRCA_",
-        env_file=".env",
+        # `.env` for a checkout you are working in; `/etc/circa/circa.env` for a
+        # deployed one. systemd reads the latter itself, but nothing else did -
+        # so `circa auth` and `circa doctor` run by hand on the VM saw no client
+        # id, no timezone and no coordinates, and reported a correctly
+        # configured machine as broken. Later entries win, and a missing file is
+        # simply skipped.
+        env_file=("/etc/circa/circa.env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )

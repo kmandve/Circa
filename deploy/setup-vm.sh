@@ -46,7 +46,9 @@ export UV_INSTALL_DIR=/usr/local/bin
 curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=/usr/local/bin sh >/dev/null
 cd "$INSTALL_DIR"
 sudo -u circa /usr/local/bin/uv venv --python 3.12
-sudo -u circa /usr/local/bin/uv pip install -e .
+# `.[science]`, not `.` - the modelling stack is an optional group, and without
+# it the collector fills the database and the model never runs.
+sudo -u circa /usr/local/bin/uv pip install -e ".[science]"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "==> Environment file"

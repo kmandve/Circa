@@ -96,3 +96,40 @@ def test_doctor_is_happy_with_real_coordinates(db, monkeypatch):
 
     out = CliRunner().invoke(app, ["doctor"]).output
     assert "still the example values" not in out, out
+
+
+def test_doctor_notices_the_modelling_stack_is_missing(db, monkeypatch):
+    """`pip install -e .` without `[science]` gives a collector that fills the
+    database forever and estimates nothing. Doctor used to report that setup as
+    healthy; the first symptom was a ModuleNotFoundError out of a scheduler job
+    hours later."""
+    from circa import cli
+
+    monkeypatch.setattr(cli, "missing_science", lambda: ["numpy", "scipy"])
+    out = CliRunner().invoke(app, ["doctor"]).output
+    assert "Modelling stack not installed" in out, out
+    # The fix line is meant to be copied, so it has to survive table wrapping.
+    assert '.[science]' in out, out
+
+
+def test_the_modelling_stack_is_present_in_this_environment():
+    """And the check itself has to be right: these tests import numpy, so a
+    non-empty answer here would mean the detection is broken, not the venv."""
+    from circa.cli import missing_science
+
+    assert missing_science() == []
+
+
+def test_every_documented_install_command_includes_the_modelling_stack():
+    """Both published install paths omitted `[science]`, so anyone following the
+    README got a model that could not run."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    for name in ("README.md", "deploy/setup-vm.sh"):
+        text = (root / name).read_text()
+        for line in re.findall(r"^.*pip install.*$", text, re.M):
+            if "-e" not in line:
+                continue
+            assert "science" in line, f"{name}: {line.strip()}"

@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -110,6 +111,26 @@ def auth(
     )
 
 
+# The modelling stack is an optional dependency group, so a `pip install -e .`
+# that omits it produces a collector that fills the database forever and never
+# estimates anything. The first symptom was a raw ModuleNotFoundError traceback
+# out of a scheduler job, hours after a install that looked successful.
+SCIENCE_MODULES = ("numpy", "scipy", "statsmodels", "circadian", "pvlib", "astral")
+
+
+def missing_science() -> list[str]:
+    from importlib.util import find_spec
+
+    missing = []
+    for name in SCIENCE_MODULES:
+        try:
+            if find_spec(name) is None:
+                missing.append(name)
+        except (ImportError, ValueError):
+            missing.append(name)
+    return missing
+
+
 # What `.env.example` and the VM setup script ship with. Shared so the check
 # below cannot drift away from the thing it is checking.
 EXAMPLE_COORDINATES = (51.5072, -0.1276)
@@ -142,6 +163,23 @@ def doctor() -> None:
     else:
         table.add_row("[red]!![/red]", "OAuth client id/secret missing (see docs/SETUP.md)")
         problems.append("oauth-client")
+
+    absent = missing_science()
+    if absent:
+        # Two rows rather than one long one: the fix has to survive the table's
+        # wrapping intact, because it is meant to be copied.
+        table.add_row(
+            "[red]!![/red]",
+            f"Modelling stack not installed ({', '.join(absent)}). "
+            "Collection works; nothing will be estimated.",
+        )
+        # escape(): Rich reads "[science]" as a style tag and silently eats it,
+        # which turned the fix line into `uv pip install -e "."` - advice that
+        # reproduces the problem it is meant to solve.
+        table.add_row("", escape('Fix: uv pip install -e ".[science]"'))
+        problems.append("science")
+    else:
+        table.add_row("[green]ok[/green]", "Modelling stack installed")
 
     # The light proxy clamps its step->lux estimate to the clear-sky irradiance
     # at your latitude. Deploying with the example coordinates still left in

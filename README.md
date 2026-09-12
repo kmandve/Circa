@@ -111,7 +111,7 @@ disorder, see a clinician.
 git clone https://github.com/kmandve/Circa.git
 cd Circa
 uv venv --python 3.12
-uv pip install -e ".[dev]"
+uv pip install -e ".[science,dev]"   # [science] is the model; without it nothing is estimated
 cp .env.example .env          # fill in: OAuth client, timezone, coordinates
 ```
 

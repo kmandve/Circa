@@ -567,3 +567,25 @@ def test_every_generated_block_names_the_day_it_belongs_to():
         for block in _build(nights=nights):
             assert block.day is not None, f"{block.key} names no day"
             assert block.key.endswith(block.day.isoformat()), block.key
+
+
+def test_no_block_is_keyed_to_a_day_it_does_not_fall_in():
+    """The calendar keeps one circadian day, so a block's key day decides
+    whether it is written at all. A block keyed to a day it does not happen on
+    is therefore either missing or a day early - and both were true of the
+    workout window, which hangs off CBTmin in the small hours and so lands the
+    afternoon *after* the DLMO its builder was named for.
+
+    A day may legitimately run past midnight - that is the point of a wake-to-
+    wake day - so the bound is generous. Being a whole day out is not.
+    """
+    from datetime import datetime, time, timedelta
+
+    for nights in (1, 7, 21):
+        for b in _build(nights=nights):
+            day_start = datetime.combine(b.day, time.min)
+            local_start = (b.start + timedelta(seconds=OFFSET)).replace(tzinfo=None)
+            delta = local_start - day_start
+            assert timedelta(0) <= delta < timedelta(hours=36), (
+                f"{b.key} starts {local_start} - {delta} into the day it names"
+            )

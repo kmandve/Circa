@@ -1041,9 +1041,14 @@ def light_blocks(
     dim_start = dlmo_ts - timedelta(hours=settings.dim_light_lead_hours)
     dim_start = min(dim_start, sleep_onset - timedelta(minutes=MARKER_MINUTES))
     until = _hhmm(sleep_onset, offset)
+    # Keyed by the evening it happens in, not by `day`. `day` is CBTmin's date,
+    # which is right for the morning light block beside it and a day late for
+    # this one: dimming the lights belongs to the evening of the day you are
+    # already awake in, not to the morning you have yet to reach.
+    dim_day = _local(dim_start, offset).date().isoformat()
     blocks.append(
         Block(
-            key=f"{LIGHT}:dim_light:{day}",
+            key=f"{LIGHT}:dim_light:{dim_day}",
             category=LIGHT,
             kind="dim_light",
             start=_round_to(dim_start, settings.round_to_minutes),
@@ -1087,9 +1092,18 @@ def body_blocks(
         w_start = cbtmin_ts + timedelta(hours=10)
         w_end = cbtmin_ts + timedelta(hours=13)
         s, e = _widen(w_start, w_end, conf)
+        # Keyed by the day this window actually falls in, not by `day`. The
+        # caffeine cutoff and last meal hang off the coming sleep onset, so they
+        # land the same evening as the DLMO this anchor is named for. The
+        # workout hangs off CBTmin, which is the small hours - so it lands the
+        # following afternoon, a different circadian day. Sharing one key date
+        # put tomorrow's workout on today's calendar and left today's, built
+        # from last night's anchor, keyed to yesterday and therefore never
+        # written at all.
+        workout_day = _local(s, offset).date().isoformat()
         blocks.append(
             Block(
-                key=f"{BODY}:workout:{day}",
+                key=f"{BODY}:workout:{workout_day}",
                 category=BODY,
                 kind="workout",
                 start=_round_to(s, settings.round_to_minutes),

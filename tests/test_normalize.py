@@ -233,6 +233,66 @@ def test_step_bout_straddling_minute_boundary_is_split_proportionally():
     assert abs(rows[1].steps - 50) < 0.01
 
 
+def test_a_bout_straddling_the_rebuild_window_does_not_lose_the_batch():
+    """Found on the VM within two hours of deploying, as a normalize.failed:
+
+        UNIQUE constraint failed: step_minute.ts
+
+    The rebuild deletes [start, end) and then writes every minute its bouts
+    touch - and a bout beginning at 18:59:30 credits 18:59, which a window
+    starting at 19:00 never deleted. The previous poll had already written
+    18:59, so the insert collided and *the whole batch of step normalisation
+    was lost*. Silently, and steps are what the light proxy is built from.
+    """
+    from circa.db.models import StepMinute
+    from circa.db.session import session_scope
+    from circa.normalize.activity import normalize_steps
+
+    base = utc(2026, 9, 12, 19, 0)
+
+    # Poll 1: a walk ending exactly on the hour. Writes 18:50..18:59.
+    with session_scope() as s:
+        normalize_steps(s, [make_raw("steps", steps_payload(
+            base - timedelta(minutes=10), base, 100))])
+    with session_scope() as s:
+        assert s.scalar(select(func.count()).select_from(StepMinute)) == 10
+
+    # Poll 2: a bout starting 30 seconds before the hour and running past it.
+    with session_scope() as s:
+        normalize_steps(s, [make_raw("steps", steps_payload(
+            base - timedelta(seconds=30), base + timedelta(minutes=3), 70))])
+
+    with session_scope() as s:
+        rows = list(s.scalars(select(StepMinute).order_by(StepMinute.ts)))
+        total = s.scalar(select(func.sum(StepMinute.steps)))
+
+    # 18:50..19:02 inclusive, no duplicates, and every step still accounted for.
+    assert [r.ts for r in rows] == sorted({r.ts for r in rows})
+    assert rows[0].ts == base - timedelta(minutes=10)
+    assert rows[-1].ts == base + timedelta(minutes=2)
+    assert abs(total - 170) < 0.01, f"steps not conserved: {total}"
+
+
+def test_rebuilding_the_same_window_twice_is_idempotent():
+    """A poll that re-reports a bout it already sent must not double-count it,
+    and must not throw."""
+    from circa.db.models import StepMinute
+    from circa.db.session import session_scope
+    from circa.normalize.activity import normalize_steps
+
+    start = utc(2026, 9, 12, 8, 0)
+    payload = steps_payload(start, start + timedelta(minutes=5), 250)
+    for _ in range(3):
+        with session_scope() as s:
+            normalize_steps(s, [make_raw("steps", payload)])
+
+    with session_scope() as s:
+        total = s.scalar(select(func.sum(StepMinute.steps)))
+        n = s.scalar(select(func.count()).select_from(StepMinute))
+    assert n == 5
+    assert abs(total - 250) < 0.01, f"steps multiplied across polls: {total}"
+
+
 # --- daily metrics ---------------------------------------------------------
 
 

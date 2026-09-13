@@ -94,10 +94,28 @@ def rebuild_step_minutes(session: Session, start: datetime, end: datetime) -> in
                 grid[minute] = grid.get(minute, 0.0) + per_minute * overlap
             minute += timedelta(minutes=1)
 
-    session.execute(delete(StepMinute).where(StepMinute.ts >= start, StepMinute.ts < end))
+    # Delete the range actually about to be written, not the range asked for.
+    # A bout that straddles either edge of [start, end) contributes minutes
+    # outside it: the walk you began at 18:59:30 credits 18:59, while a window
+    # starting at 19:00 deletes nothing before 19:00. The previous poll had
+    # already written 18:59, so the insert collided and the whole batch of step
+    # normalisation was lost - silently, since steps are what the light proxy
+    # is built from.
+    lo = min([start, *grid]) if grid else start
+    hi = max([end, max(grid) + timedelta(minutes=1)]) if grid else end
+    session.execute(delete(StepMinute).where(StepMinute.ts >= lo, StepMinute.ts < hi))
+
     rows = [{"ts": ts, "steps": round(value, 3)} for ts, value in sorted(grid.items())]
     for chunk in _chunked(rows, 500):
-        session.execute(sqlite_insert(StepMinute).values(chunk))
+        # Belt and braces: the delete above should make every row new, but a
+        # rebuild is authoritative for any minute it computes, so a collision
+        # should overwrite rather than throw.
+        stmt = sqlite_insert(StepMinute).values(chunk)
+        session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["ts"], set_={"steps": stmt.excluded.steps}
+            )
+        )
     session.flush()
     return len(rows)
 

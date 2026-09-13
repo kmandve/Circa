@@ -116,7 +116,27 @@ def provision(
         applied_colour[link.category] = link.color_id
     session.rollback()  # release any read lock before going to the network
 
-    remote = {c.get("summary"): c for c in client.list_calendars()}
+    # Google is perfectly happy to hold two calendars with the same name, and a
+    # race will produce them: two processes both read the list, both fail to
+    # find "Circa · Rhythm", and both create it. The in-process pipeline lock
+    # does not help, because the other process is a `circa run` at a terminal.
+    # Group by summary and keep one deterministically, so a duplicate is a
+    # transient rather than something you have to notice and clean up yourself.
+    by_summary: dict[str, list[dict]] = {}
+    for cal in client.list_calendars():
+        by_summary.setdefault(cal.get("summary"), []).append(cal)
+    remote = {
+        summary: min(cals, key=lambda c: c["id"])
+        for summary, cals in by_summary.items()
+    }
+    duplicates = [
+        cal
+        for summary, cals in by_summary.items()
+        if summary in {meta[0] for meta in CATEGORY_META.values()} and len(cals) > 1
+        for cal in cals
+        if cal["id"] != remote[summary]["id"]
+        and cal["id"] not in set(existing_local.values())
+    ]
 
     mapping: dict[str, str] = {}
     created: dict[str, tuple[str, str]] = {}
@@ -147,6 +167,14 @@ def provision(
     for category in mapping:
         if applied_colour.get(category) != CATEGORY_RGB[category][0]:
             recolour[category] = CATEGORY_RGB[category][0]
+
+    for cal in duplicates:
+        try:
+            client.delete_calendar(cal["id"])
+            log.info("gcal.duplicate_calendar_removed", summary=cal.get("summary"))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("gcal.duplicate_calendar_failed",
+                        summary=cal.get("summary"), error=str(exc))
 
     coloured: set[str] = set()
     rgb_ok = calendar_colours_permitted()

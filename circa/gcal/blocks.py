@@ -919,6 +919,7 @@ def rhythm_block(
     dip_t, dip_v = min(sample, key=lambda p: p[1])
     span = f"{_hhmm(first, offset)}–{_hhmm(last, offset)}"
 
+    hourly = _hourly(awake, offset)
     return [
         Block(
             key=f"{RHYTHM}:rhythm:{day.isoformat()}",
@@ -930,20 +931,90 @@ def rhythm_block(
             end=last,
             day=day,
             all_day=True,
-            title=f"{bar}  {span}",
-            description="\n\n".join([
-                f"Your predicted energy across {span}, one bar per "
-                f"{max(int((last - first).total_seconds() / 60 / len(sample)), 1)} "
-                "minutes.",
-                f"Highest around {_hhmm(peak_t, offset)} ({peak_v:.0f}/100), "
-                f"lowest around {_hhmm(dip_t, offset)} ({dip_v:.0f}/100).",
-                "The bars are scaled to today's own range, so the shape is "
-                "comparable within a day but not between days - the figures "
-                "above are the ones to read for level.",
-                _confidence_note(conf),
+            # Title only - the span moved into the description, because on a
+            # phone the all-day row truncates and the chart is the half worth
+            # keeping.
+            title=bar,
+            description="".join([
+                _grid_chart(hourly, offset),
+                _hour_rows(hourly, offset),
+                f"<br>Highest around {_hhmm(peak_t, offset)} "
+                f"({peak_v:.0f}/100), lowest around {_hhmm(dip_t, offset)} "
+                f"({dip_v:.0f}/100). Bars are scaled to the day's own range, so "
+                "the shape is comparable within a day but not between days.<br><br>",
+                _confidence_note(conf).replace("\n", "<br>"),
             ]),
         )
     ]
+
+
+# How the description is drawn. Established by probing a real calendar rather
+# than guessing, because Google renders a narrow and undocumented subset:
+#
+#   inline <img>, even a data URI  - stripped, leaving a broken-image icon
+#   <div style="...">              - stripped entirely
+#   <table> with bgcolor cells     - renders, but cell height is not honoured
+#   <font face="monospace">        - renders, and columns line up
+#
+# So: a grid of equal cells coloured to make a bar chart, and beneath it a
+# monospace table which carries the times and the numbers and survives anywhere.
+GRID_ROWS = 6
+GRID_INK = "#E9A178"
+GRID_FAINT = "#F3EBE4"
+
+
+def _hourly(awake: list[tuple[datetime, float]], offset: int) -> list[tuple[datetime, float]]:
+    buckets: dict[datetime, list[float]] = {}
+    for t, e in awake:
+        buckets.setdefault(_local(t, offset).replace(minute=0, second=0, microsecond=0),
+                           []).append(float(e))
+    return [(t, sum(v) / len(v)) for t, v in sorted(buckets.items())]
+
+
+def _grid_chart(hourly: list[tuple[datetime, float]], offset: int) -> str:
+    """A bar chart as a table of coloured cells - the one graphical form that
+    survives Google's sanitiser."""
+    if not hourly:
+        return ""
+    values = [v for _, v in hourly]
+    lo, hi = min(values), max(values)
+    span = max(hi - lo, 1e-9)
+    rows = []
+    for r in range(GRID_ROWS, 0, -1):
+        cells = "".join(
+            f'<td bgcolor="{GRID_INK if (v - lo) / span * GRID_ROWS >= r - 0.5 else GRID_FAINT}"'
+            ' width="14" height="9"></td>'
+            for v in values
+        )
+        rows.append(f"<tr>{cells}</tr>")
+    labels = "".join(
+        f'<td align="center"><font size="1">'
+        f'{t.strftime("%-I").lstrip("0") if t.hour % 3 == 0 else "&nbsp;"}'
+        "</font></td>"
+        for t, _ in hourly
+    )
+    return (f'<table cellpadding="0" cellspacing="1">{"".join(rows)}'
+            f"<tr>{labels}</tr></table><br>")
+
+
+def _hour_rows(hourly: list[tuple[datetime, float]], offset: int) -> str:
+    """The same data as text, with the times and the numbers on it.
+
+    Monospace so the columns line up, and one self-contained line per hour so
+    that even where the face is ignored nothing is misread - each row carries
+    its own label rather than relying on a shared axis."""
+    if not hourly:
+        return ""
+    values = [v for _, v in hourly]
+    lo, hi = min(values), max(values)
+    span = max(hi - lo, 1e-9)
+    width = 14
+    lines = []
+    for t, v in hourly:
+        filled = round((v - lo) / span * width)
+        clock = t.strftime("%-I%p").lower().replace("am", "a").replace("pm", "p")
+        lines.append(f"{clock:>4} {'█' * filled}{'·' * (width - filled)} {v:.0f}")
+    return '<font face="monospace">' + "<br>".join(lines) + "</font><br>"
 
 
 def grogginess_blocks(

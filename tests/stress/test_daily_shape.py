@@ -8,6 +8,7 @@ day is present and coherent from the very first nights.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -699,3 +700,43 @@ def test_the_summary_never_eats_the_blocks_it_describes():
     kinds = {b.kind for b in blocks}
     for essential in ("peak_focus", "circadian_dip", "second_wind"):
         assert essential in kinds, f"{essential} was swallowed by the summary"
+
+
+def test_the_description_only_uses_html_google_actually_renders():
+    """Established by probing a real calendar, not by guessing. Google renders a
+    narrow and undocumented subset of HTML in an event description:
+
+        inline <img>, even a data URI  - stripped, broken-image icon
+        <div style="...">              - stripped entirely
+        <table> with bgcolor cells     - renders (cell height is not honoured)
+        <font face="monospace">        - renders, and columns line up
+
+    A chart built on anything else is invisible on the device it exists for.
+    """
+    import re
+
+    blocks = [b for b in _build(nights=21) if b.kind == "rhythm"]
+    assert blocks
+    html = blocks[0].description
+    tags = {t.lower() for t in re.findall(r"<\s*([a-zA-Z]+)", html)}
+    assert tags <= {"table", "tr", "td", "font", "br", "b"}, f"unrenderable: {tags}"
+    assert "style=" not in html, "inline styles are stripped"
+    assert "<img" not in html, "images are stripped"
+    assert 'face="monospace"' in html, "the text chart needs its columns aligned"
+    assert "bgcolor=" in html, "the colour chart is the only graphical form that renders"
+
+
+def test_the_description_carries_the_times_and_the_numbers():
+    """The sparkline alone was unusable: no axis, so you could see a dip but not
+    when it was."""
+    blocks = [b for b in _build(nights=21) if b.kind == "rhythm"]
+    html = blocks[0].description
+    assert re.search(r"\d{1,2}[ap]\s", html), "no clock labels on the rows"
+    assert "/100" in html, "no absolute figures"
+
+
+def test_the_title_is_short_enough_for_a_phones_all_day_row():
+    """It overflowed, and the half that got cut was the chart."""
+    for b in _build(nights=21):
+        if b.kind == "rhythm":
+            assert len(b.title) <= 24, f"{b.title!r} is {len(b.title)} characters"

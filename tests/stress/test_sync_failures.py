@@ -503,3 +503,65 @@ def test_the_sweep_leaves_a_block_that_is_running_right_now(db):
 
     assert report.orphans_removed == 0, "a block in progress was swept away"
     assert len(client.events) == 2
+
+
+def test_two_calendars_with_the_same_name_are_reduced_to_one(db):
+    """Google will hold two calendars called "Circa · Rhythm" without complaint,
+    and a race produces exactly that: two processes read the list, neither finds
+    it, both create it. The in-process pipeline lock does not help, because the
+    second process is a `circa run` at a terminal.
+
+    Seen on the real account - two Rhythm calendars in the sidebar, Circa
+    tracking one of them.
+    """
+    from circa.gcal.sync import provision
+    from circa.settings_store import RuntimeSettings
+    from tests.test_calendar_sync import FakeCalendarClient
+
+    client = FakeCalendarClient()
+    settings = RuntimeSettings()
+    with db() as s:
+        provision(s, client, settings)
+    rhythm = [c for c in client.calendars.values() if c["summary"] == "Circa · Rhythm"]
+    assert len(rhythm) == 1
+
+    # A second process gets there at the same moment.
+    client.create_calendar("Circa · Rhythm", "dup", "UTC")
+    assert sum(1 for c in client.calendars.values()
+               if c["summary"] == "Circa · Rhythm") == 2
+
+    with db() as s:
+        provision(s, client, settings)
+
+    assert sum(1 for c in client.calendars.values()
+               if c["summary"] == "Circa · Rhythm") == 1, "the duplicate survived"
+
+
+def test_deduplication_never_removes_the_calendar_in_use(db):
+    """The one Circa has on record is the one holding your events. Picking the
+    wrong survivor would delete a calendar full of them."""
+    from sqlalchemy import select
+
+    from circa.db.models import CalendarLink
+    from circa.db.session import session_scope
+    from circa.gcal.sync import provision
+    from circa.settings_store import RuntimeSettings
+    from tests.test_calendar_sync import FakeCalendarClient
+
+    client = FakeCalendarClient()
+    settings = RuntimeSettings()
+    with db() as s:
+        provision(s, client, settings)
+    with session_scope() as s:
+        tracked = {
+            link.calendar_id
+            for link in s.scalars(select(CalendarLink))
+            if link.calendar_id
+        }
+
+    for summary in ("Circa · Rhythm", "Circa · Focus"):
+        client.create_calendar(summary, "dup", "UTC")
+    with db() as s:
+        provision(s, client, settings)
+
+    assert tracked <= set(client.calendars), "a calendar in use was deleted"

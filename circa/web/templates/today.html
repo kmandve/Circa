@@ -117,9 +117,9 @@
   {% endfor %}
 </div>
 <p class="note dim foot-note">
-  {% if blocks_beyond %}{{ blocks_beyond }} more over the next two days, on your calendar.
-  {% else %}On {{ n_calendars }} separate Google Calendars, so you can hide any of them
-  from your calendar sidebar.{% endif %}
+  {% if blocks_beyond %}{{ blocks_beyond }} more later today, on your calendar.
+  {% else %}Your whole day, on {{ n_calendars }} separate Google Calendars — it is
+  replaced when you wake tomorrow, so you can look back at it tonight.{% endif %}
 </p>
 {% else %}
 <div class="banner info">{{ icon('info', 18) }}

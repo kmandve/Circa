@@ -10,14 +10,15 @@ so an unchanged block produces no calendar activity at all.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from circa.config import get_settings
-from circa.db.models import CalendarBlock, CalendarLink
+from circa.db.models import CalendarBlock, CalendarLink, SleepSession
 from circa.gcal.blocks import (
     CATEGORY_EVENT_COLOUR,
     CATEGORY_META,
@@ -262,6 +263,37 @@ def _event_body(
     return body
 
 
+# How long a logged wake can be before the calendar stops trusting it as the
+# start of "today". A watch left on the nightstand must not freeze the calendar
+# on a day that ended two days ago.
+CIRCADIAN_DAY_STALE_HOURS = 36
+
+
+def circadian_day(session: Session, now: datetime, offset: int) -> date:
+    """The local date of the wake that began the day you are currently in.
+
+    A biological day runs wake to wake, not midnight to midnight - which is why
+    tonight's sleep window, wind-down and melatonin marker all belong to the day
+    you woke up on, not the one you fall asleep into.
+    """
+    last_wake = session.scalar(
+        select(func.max(SleepSession.end_ts)).where(
+            SleepSession.is_main_sleep.is_(True),
+            SleepSession.excluded.is_(False),
+        )
+    )
+    if last_wake is not None:
+        if last_wake.tzinfo is None:
+            last_wake = last_wake.replace(tzinfo=UTC)
+        age = now - last_wake
+        if timedelta(0) <= age <= timedelta(hours=CIRCADIAN_DAY_STALE_HOURS):
+            return (last_wake + timedelta(seconds=offset)).date()
+    # Nothing recent to anchor on - the watch was not worn, or is not synced
+    # yet. Fall back to the local calendar day so the calendar keeps turning
+    # over instead of stalling on a day that is finished.
+    return (now + timedelta(seconds=offset)).date()
+
+
 def push(
     session: Session,
     blocks: list[Block],
@@ -289,19 +321,30 @@ def push(
         # already passed is clutter, but a record of it is the half of the
         # picture the calendar was missing entirely.
         history_start = now - timedelta(days=max(settings.history_days, 0))
+        offset = int(
+            now.astimezone(ZoneInfo(config.timezone)).utcoffset().total_seconds()
+        )
+        today = circadian_day(session, now, offset)
 
+        # The calendar holds exactly one circadian day: the one you woke into.
+        # Blocks stay put once written, whether or not they have happened yet -
+        # a plan you can look back at is worth more than a tidy calendar, and a
+        # block vanishing the minute it ends makes the day unreadable by the
+        # evening. They keep being refreshed while they stand, so a revised
+        # estimate still moves them.
+        #
+        # The whole set is replaced at the wake that starts the next day, which
+        # is the only boundary that means anything: the previous day's plan goes
+        # and the new one appears together, once there is real data to build it
+        # from. Midnight is not that boundary; waking up is.
         def _in_window(block: Block) -> bool:
-            if block.start > window_end:
-                return False
             if block.kind in RETROSPECTIVE_KINDS:
                 return block.start >= history_start
-            # A forecast is worth keeping until it has finished, which is a
-            # statement about its end, not its start. Anchored on the start with
-            # a two-hour grace, "Dim lights" - fifteen minutes long - sat on the
-            # calendar for an hour and three quarters after it was spent, while
-            # an eight-hour sleep block fell out of the refresh two hours in and
-            # went stale halfway through the night it described.
-            return block.end > now
+            if block.start > window_end:
+                return False
+            if block.day is None:
+                return True          # not day-scoped; the rule does not apply
+            return block.day == today
 
         wanted = {b.key: b for b in blocks if _in_window(b)}
 

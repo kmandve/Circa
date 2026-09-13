@@ -198,6 +198,30 @@ class Block:
     # evening its DLMO fell in, which is not the date the night ended on.
     supersedes_kinds: frozenset[str] = frozenset()
 
+    # Which circadian day this block belongs to, as a local date. Every key ends
+    # in that date already, so it is derived from the key rather than passed at
+    # each of the dozen construction sites - one definition that cannot drift
+    # from the handle the calendar is reconciled by.
+    day: date | None = None
+
+    def __post_init__(self) -> None:
+        if self.day is None:
+            self.day = _day_from_key(self.key)
+
+
+def _day_from_key(key: str) -> date | None:
+    """The local date a block key ends in, or None if it names no day.
+
+    The key is authoritative rather than the block's own start: a night that
+    begins at 1:30am belongs to the evening that led into it, so its key is
+    dated a day before it starts. Every forecast Circa generates names a day -
+    asserted by test - and anything that does not is simply not day-scoped.
+    """
+    try:
+        return date.fromisoformat(key.rsplit(":", 1)[-1])
+    except ValueError:
+        return None
+
 
 def _round_to(ts: datetime, minutes: int) -> datetime:
     seconds = minutes * 60

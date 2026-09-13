@@ -557,3 +557,13 @@ def test_block_times_do_not_change_as_the_day_goes_on():
         assert len(spans) == 1, (
             f"{kind} moved between polls: {sorted(str(s) for s in spans)}"
         )
+
+
+def test_every_generated_block_names_the_day_it_belongs_to():
+    """The calendar holds one circadian day at a time, and decides membership
+    from `block.day` - which is read off the end of the key. A block that named
+    no day would quietly escape the rule and live on the calendar forever."""
+    for nights in (1, 7, 21):
+        for block in _build(nights=nights):
+            assert block.day is not None, f"{block.key} names no day"
+            assert block.key.endswith(block.day.isoformat()), block.key

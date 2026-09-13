@@ -151,35 +151,34 @@ def _marker(key: str, kind: str, starts_in_hours: float, minutes: int = 15):
     )
 
 
-def test_a_short_marker_is_gone_once_it_has_passed(db):
-    """Found on the live calendar: "Dim lights" runs for fifteen minutes and was
-    still sitting there an hour and a quarter after it ended.
+def test_a_spent_marker_stays_for_the_rest_of_the_day(db):
+    """The rule this replaced deleted a forecast the moment it ended, which made
+    the day unreadable by the evening: by 8pm there was no record of what the
+    plan had been at 8am.
 
-    The window kept any forecast whose *start* was within the last two hours, so
-    the shorter the block the longer it outlived itself.
+    A block now stays for the circadian day it belongs to whether or not it has
+    happened, and is still refreshed while it stands, so a revised estimate
+    moves it rather than leaving it stale.
     """
     from circa.gcal.sync import push
     from circa.settings_store import RuntimeSettings
-    from tests.test_calendar_sync import FakeCalendarClient
+    from tests.test_calendar_sync import FakeCalendarClient, _key
 
     client = FakeCalendarClient()
     settings = RuntimeSettings()
+    key = _key("light", "dim_light")
 
-    # Write it while it is still ahead.
     with db() as s:
-        push(s, [_marker("light:dim_light:a", "dim_light", 0.25)], settings, client=client)
+        push(s, [_marker(key, "dim_light", 0.25)], settings, client=client)
     assert len(client.events) == 1
 
-    # An hour later it has been over for 45 minutes, and the model no longer
-    # offers it. It must not survive on the strength of having started recently.
-    spent = _marker("light:dim_light:a", "dim_light", -1.0)
-    live = _marker("light:dim_light:b", "dim_light", 3.0)
+    # An hour on, it is over. It belongs to today, so it stays - and moving it
+    # still works.
     with db() as s:
-        report = push(s, [spent, live], settings, client=client)
+        report = push(s, [_marker(key, "dim_light", -1.0)], settings, client=client)
 
-    assert report.deleted == 1, f"spent marker kept: {report}"
-    remaining = [e for e in client.events.values() if not e.get("deleted")]
-    assert len(remaining) == 1
+    assert report.deleted == 0, "a spent block was removed before the day ended"
+    assert report.updated == 1, "a spent block stopped tracking the model"
 
 
 def test_a_long_block_still_in_progress_is_kept_and_refreshed(db):
@@ -214,3 +213,142 @@ def test_a_long_block_still_in_progress_is_kept_and_refreshed(db):
     assert report.updated == 1, "an in-progress night stopped tracking the model"
     body = next(iter(client.events.values()))["body"]
     assert body["summary"] == "Sleep (revised)"
+
+
+# --- the day turns over at the wake, not at midnight -------------------------
+
+
+def _sleep_row(s, start, end):
+    from circa.db.models import SleepSession
+
+    s.add(SleepSession(
+        external_id=f"t/{start.isoformat()}", start_ts=start, end_ts=end,
+        tz_name="America/Chicago", utc_offset_seconds=-18000,
+        sleep_date=end.date(), is_main_sleep=True,
+        tst_minutes=(end - start).total_seconds() / 60 - 20,
+        time_in_bed_minutes=(end - start).total_seconds() / 60,
+        midpoint_ts=start + (end - start) / 2, wake_forced=False,
+    ))
+
+
+def test_the_circadian_day_is_the_day_you_woke_into(db):
+    """Not the calendar date. A night that runs past midnight belongs to the day
+    you woke up on, which is why tonight's sleep window and this morning's
+    grogginess carry the same day."""
+    from datetime import UTC, datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from circa.db.session import session_scope
+    from circa.gcal.sync import circadian_day
+
+    tz = ZoneInfo("America/Chicago")
+    now = datetime.now(UTC)
+    offset = int(now.astimezone(tz).utcoffset().total_seconds())
+    woke = now - timedelta(hours=6)
+
+    with session_scope() as s:
+        _sleep_row(s, woke - timedelta(hours=8), woke)
+    with session_scope() as s:
+        assert circadian_day(s, now, offset) == (woke + timedelta(seconds=offset)).date()
+
+
+def test_a_wake_that_never_arrives_does_not_freeze_the_calendar(db):
+    """If the watch is not worn there is no wake to anchor on. Falling back to
+    the calendar day keeps the day turning over; without it the calendar would
+    stall on a day that finished, forever."""
+    from datetime import UTC, datetime, timedelta
+
+    from circa.db.session import session_scope
+    from circa.gcal.sync import CIRCADIAN_DAY_STALE_HOURS, circadian_day
+
+    now = datetime.now(UTC)
+    offset = -18000
+    stale = now - timedelta(hours=CIRCADIAN_DAY_STALE_HOURS + 6)
+
+    with session_scope() as s:
+        _sleep_row(s, stale - timedelta(hours=8), stale)
+    with session_scope() as s:
+        assert circadian_day(s, now, offset) == (now + timedelta(seconds=offset)).date()
+
+    # And with no sleep recorded at all.
+    with session_scope() as s:
+        from circa.db.models import SleepSession
+        s.query(SleepSession).delete()
+    with session_scope() as s:
+        assert circadian_day(s, now, offset) == (now + timedelta(seconds=offset)).date()
+
+
+def test_waking_replaces_the_whole_previous_day(db):
+    """The rule in one test: yesterday's plan goes and today's appears together,
+    at the wake - not at midnight, and not block by block as each one expires.
+
+    Played out on a frozen clock as it actually happens: a day's plan is written
+    the morning it belongs to, and is still there that evening. The next
+    morning's sleep is logged, and the whole set turns over at once.
+    """
+    from datetime import UTC, datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from freezegun import freeze_time
+
+    from circa.db.session import session_scope
+    from circa.gcal.blocks import Block
+    from circa.gcal.sync import push
+    from circa.settings_store import RuntimeSettings
+    from tests.test_calendar_sync import FakeCalendarClient
+
+    tz = ZoneInfo("America/Chicago")
+    client = FakeCalendarClient()
+    settings = RuntimeSettings()
+
+    def plan(day, kinds, at):
+        return [
+            Block(key=f"focus:{k}:{day.isoformat()}", category="focus", kind=k,
+                  start=at + timedelta(hours=i + 1),
+                  end=at + timedelta(hours=i + 1, minutes=45),
+                  title=k, description="why")
+            for i, k in enumerate(kinds)
+        ]
+
+    # --- Monday, 9am local: woke an hour ago, the day's plan goes up ---------
+    monday_9am = datetime(2026, 9, 14, 14, 0, tzinfo=UTC)      # 9am Chicago
+    monday = monday_9am.astimezone(tz).date()
+    with freeze_time(monday_9am):
+        with session_scope() as s:
+            _sleep_row(s, monday_9am - timedelta(hours=9), monday_9am - timedelta(hours=1))
+        with db() as s:
+            push(s, plan(monday, ["peak_focus", "circadian_dip"], monday_9am),
+                 settings, client=client)
+    assert len([e for e in client.events.values() if not e.get("deleted")]) == 2
+
+    # --- Monday, 10pm: both are long over, and both are still there ----------
+    #
+    # A third block, still ahead, matters here: with nothing left to write the
+    # prune is skipped anyway by the guard against wiping a calendar on an empty
+    # run, and the test would pass without proving anything.
+    monday_10pm = monday_9am + timedelta(hours=13)
+    with freeze_time(monday_10pm):
+        evening = plan(monday, ["wind_down"], monday_10pm)
+        with db() as s:
+            report = push(
+                s,
+                plan(monday, ["peak_focus", "circadian_dip"], monday_9am) + evening,
+                settings, client=client,
+            )
+        assert report.deleted == 0, "the day's plan was pruned before the day ended"
+    assert len([e for e in client.events.values() if not e.get("deleted")]) == 3
+
+    # --- Tuesday, 9am: this morning's sleep lands. The day turns over. -------
+    tuesday_9am = monday_9am + timedelta(days=1)
+    tuesday = tuesday_9am.astimezone(tz).date()
+    assert tuesday != monday
+    with freeze_time(tuesday_9am):
+        with session_scope() as s:
+            _sleep_row(s, tuesday_9am - timedelta(hours=9), tuesday_9am - timedelta(hours=1))
+        with db() as s:
+            report = push(s, plan(tuesday, ["peak_focus", "circadian_dip", "second_wind"],
+                                  tuesday_9am), settings, client=client)
+
+    assert report.deleted == 3, f"Monday's plan survived the wake: {report}"
+    assert report.created == 3, f"Tuesday's plan was not written: {report}"
+    assert len([e for e in client.events.values() if not e.get("deleted")]) == 3

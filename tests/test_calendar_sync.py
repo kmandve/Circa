@@ -74,6 +74,24 @@ class FakeCalendarClient:
         self.calendars.pop(calendar_id, None)
 
 
+def _key(category: str, kind: str) -> str:
+    """A key shaped like the ones Circa generates: ending in the circadian day
+    the block belongs to.
+
+    That day is *today's* local date, not the date the block's start happens to
+    fall on - a block four hours from now can be after local midnight and still
+    belong to the day you are currently awake in, which is the whole point of a
+    wake-to-wake day. Production keys sleep blocks the same way, by the evening
+    that led into the night rather than the morning it ended on.
+    """
+    from zoneinfo import ZoneInfo
+
+    from circa.config import get_settings
+
+    today = datetime.now(UTC).astimezone(ZoneInfo(get_settings().timezone)).date()
+    return f"{category}:{kind}:{today.isoformat()}"
+
+
 def _block(key: str, hours_ahead: float = 4.0, title: str = "Peak Focus (±30m)") -> Block:
     start = datetime.now(UTC) + timedelta(hours=hours_ahead)
     return Block(
@@ -91,7 +109,7 @@ def client():
 def test_first_push_creates_calendars_and_events(client, db):
     settings = RuntimeSettings()
     with db() as s:
-        report = push(s, [_block("focus:peak_focus:2026-09-02")], settings, client=client)
+        report = push(s, [_block(_key('focus', 'peak_focus'))], settings, client=client)
     assert report.created == 1
     assert report.updated == 0
     assert any(c.startswith("create_calendar") for c in client.calls)
@@ -100,7 +118,7 @@ def test_first_push_creates_calendars_and_events(client, db):
 def test_identical_second_push_makes_no_api_writes(client, db):
     """The core idempotency guarantee."""
     settings = RuntimeSettings()
-    block = _block("focus:peak_focus:2026-09-02")
+    block = _block(_key('focus', 'peak_focus'))
 
     with db() as s:
         push(s, [block], settings, client=client)
@@ -118,7 +136,7 @@ def test_identical_second_push_makes_no_api_writes(client, db):
 def test_changed_block_patches_rather_than_recreating(client, db):
     """Patching keeps the event ID stable, which is what avoids a notification storm."""
     settings = RuntimeSettings()
-    key = "focus:peak_focus:2026-09-02"
+    key = _key('focus', 'peak_focus')
 
     with db() as s:
         push(s, [_block(key)], settings, client=client)

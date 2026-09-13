@@ -960,7 +960,10 @@ def rhythm_block(
 # monospace table which carries the times and the numbers and survives anywhere.
 GRID_ROWS = 6
 GRID_INK = "#E9A178"
-GRID_FAINT = "#F3EBE4"
+# Visible, not near-white. The first version used #F3EBE4, which against a white
+# popup is indistinguishable from nothing - so the top row, where only the peak
+# hours are inked, read as a row that had failed to render.
+GRID_TRACK = "#E7E1DB"
 
 
 def _hourly(awake: list[tuple[datetime, float]], offset: int) -> list[tuple[datetime, float]]:
@@ -982,15 +985,19 @@ def _grid_chart(hourly: list[tuple[datetime, float]], offset: int) -> str:
     rows = []
     for r in range(GRID_ROWS, 0, -1):
         cells = "".join(
-            f'<td bgcolor="{GRID_INK if (v - lo) / span * GRID_ROWS >= r - 0.5 else GRID_FAINT}"'
-            ' width="14" height="9"></td>'
+            f'<td bgcolor="'
+            f'{GRID_INK if (v - lo) / span * GRID_ROWS >= r - 0.5 else GRID_TRACK}"'
+            # &nbsp;, not an empty cell. The probe showed `height` is ignored, so
+            # a cell with no content has nothing to give it height and collapses -
+            # taking its whole row with it.
+            ' width="14">&nbsp;</td>'
             for v in values
         )
         rows.append(f"<tr>{cells}</tr>")
     labels = "".join(
-        f'<td align="center"><font size="1">'
+        f'<td align="center">'
         f'{t.strftime("%-I").lstrip("0") if t.hour % 3 == 0 else "&nbsp;"}'
-        "</font></td>"
+        "</td>"
         for t, _ in hourly
     )
     return (f'<table cellpadding="0" cellspacing="1">{"".join(rows)}'

@@ -740,3 +740,26 @@ def test_the_title_is_short_enough_for_a_phones_all_day_row():
     for b in _build(nights=21):
         if b.kind == "rhythm":
             assert len(b.title) <= 24, f"{b.title!r} is {len(b.title)} characters"
+
+
+def test_every_cell_in_the_colour_chart_has_content_and_a_visible_colour():
+    """The probe showed Google ignores a cell's `height`, so an empty cell has
+    nothing to give it height and collapses - taking its row with it. And a
+    near-white "empty" colour makes a sparse row look like one that failed to
+    render, which is what the top row did."""
+    import re
+
+    blocks = [b for b in _build(nights=21) if b.kind == "rhythm"]
+    html = blocks[0].description
+    grid = html[:html.index("</table>")]
+
+    assert "></td>" not in grid, "an empty cell will collapse its row"
+    assert "height=" not in grid, "height is ignored; relying on it hides the bug"
+
+    colours = set(re.findall(r'bgcolor="(#[0-9A-Fa-f]{6})"', grid))
+    assert len(colours) == 2, colours
+    for colour in colours:
+        r, g, b = (int(colour[i:i + 2], 16) for i in (1, 3, 5))
+        assert min(255 - r, 255 - g, 255 - b) >= 8, (
+            f"{colour} is too close to white to read as a filled cell"
+        )

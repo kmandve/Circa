@@ -486,16 +486,8 @@ def test_the_palette_hexes_are_the_ones_google_paints():
 # --- blocks must not vanish as the day goes on ------------------------------
 
 
-@pytest.mark.parametrize("poll_hour", list(range(6, 24)))
-def test_a_block_still_ahead_is_never_dropped(poll_hour):
-    """An evening peak could be deleted minutes before it started.
-
-    The extremum search was restricted to what was still ahead, so as the day
-    went on the window shrank - and once fewer than six waking hours remained,
-    the six-hour minimum skipped the whole day and took blocks that had not
-    happened yet with it. Parametrised over every polling hour because the bug
-    only appears late in the day.
-    """
+def _focus_at(poll_hour: int):
+    """Today's focus blocks as seen by a poll at `poll_hour`, on a fixed day."""
     as_of = datetime(2026, 9, 10, poll_hour, 0, tzinfo=TZ).astimezone(UTC)
     settings = RuntimeSettings()
     onset_h = (21.5 + settings.prior["dlmo_offset_hours"] - 4.0) % 24
@@ -507,7 +499,7 @@ def test_a_block_still_ahead_is_never_dropped(poll_hour):
     ]
     history = SleepWakeHistory(episodes, as_of - timedelta(days=10),
                                as_of + timedelta(hours=70))
-    times = grid(as_of - timedelta(hours=24), as_of + timedelta(hours=70), minutes=10)
+    times = grid(as_of - timedelta(hours=36), as_of + timedelta(hours=70), minutes=10)
     curve = compute(times, OFFSET, history, np.full(50, 4.5))
     dlmo = datetime(2026, 9, 10, 21, 30, tzinfo=TZ).astimezone(UTC)
     blocks = build_all(
@@ -517,17 +509,34 @@ def test_a_block_still_ahead_is_never_dropped(poll_hour):
         from_ts=as_of, to_ts=as_of + timedelta(hours=48),
     )
     today = as_of.astimezone(TZ).date()
-    focus_today = [
-        b for b in blocks if b.category == "focus" and _local_day(b) == today
-    ]
-    # Anything on today that has not finished yet must be present.
-    for b in focus_today:
-        assert b.end > as_of, f"{b.kind} ended at {b.end} but was still written"
-    # And when the evening peak is genuinely still ahead, it has to be there.
+    return as_of, [b for b in blocks
+                   if b.category == "focus" and _local_day(b) == today]
+
+
+@pytest.mark.parametrize("poll_hour", list(range(6, 24)))
+def test_the_days_focus_blocks_do_not_shrink_as_the_day_goes_on(poll_hour):
+    """An evening peak could once be deleted minutes before it started: the
+    extremum search only looked at what was still ahead, so the window shrank
+    through the day until the six-hour minimum skipped the day entirely and took
+    blocks that had not happened yet with it.
+
+    The calendar now keeps the whole circadian day whether or not each block has
+    passed, so the stronger statement holds: what a late poll sees for today is
+    exactly what an early one saw. Parametrised over every waking hour because
+    the failure only appeared late in the day.
+    """
+    _, early = _focus_at(6)
+    as_of, late = _focus_at(poll_hour)
+
+    assert {b.kind for b in late} == {b.kind for b in early}, (
+        f"a {poll_hour}:00 poll sees a different day from a 06:00 one"
+    )
+    # And the evening peak is genuinely there while it is still ahead.
     if poll_hour < 19:
-        assert any(b.kind == "second_wind" for b in focus_today), (
+        assert any(b.kind == "second_wind" for b in late), (
             f"no evening peak at a {poll_hour}:00 poll"
         )
+
 
 
 def test_block_times_do_not_change_as_the_day_goes_on():

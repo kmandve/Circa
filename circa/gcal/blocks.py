@@ -590,10 +590,13 @@ def alertness_blocks(
             end_ts = _round_to(end_ts, settings.round_to_minutes)
             if end_ts <= start_ts:
                 continue
-            # Now drop what has already finished. A window you are still inside
-            # stays: it is the one telling you what is happening right now.
-            if end_ts <= from_ts:
-                continue
+            # Deliberately no "drop what has already finished" here any more.
+            # Whether a spent block belongs on the calendar is a lifecycle
+            # question, and it is answered in one place - the sync keeps the
+            # circadian day you are in, whatever has happened within it. Dropping
+            # them here as well meant today's afternoon dip and evening peak
+            # disappeared as they passed while every other block from the same
+            # day stayed, which reads as a bug even when the rest is working.
 
             blocks.append(
                 Block(
@@ -838,8 +841,10 @@ def grogginess_blocks(
         end = min(span_start + timedelta(hours=GROGGINESS_HOURS), span_end)
         if end - span_start < timedelta(minutes=settings.min_block_minutes):
             continue
-        if end <= from_ts:
-            continue
+        # No finished-drop here either: the sync keeps the circadian day you are
+        # in, and this morning's grogginess is part of that day at six in the
+        # evening just as much as at nine in the morning. Dropping it here made
+        # the day quietly change shape at whatever hour the block ended.
         day = _local(span_start, offset).date().isoformat()
         blocks.append(
             Block(

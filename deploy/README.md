@@ -183,6 +183,17 @@ gcloud compute instances delete-access-config circa \
 
 # 5. And drop the rules the default VPC opens to the whole internet.
 gcloud compute firewall-rules delete default-allow-ssh default-allow-rdp
+
+# 6. Detach the default Compute service account, which carries roles/editor.
+#    Circa authenticates to Google with its own OAuth client and never calls a
+#    GCP API, so that identity buys nothing and is pure blast radius: anything
+#    running on the box could mint a project-editor token from the metadata
+#    server. Needs a stop/start; nothing is lost, since data is fetched by
+#    watermark on the way back up.
+gcloud compute instances stop circa --zone=us-central1-a
+gcloud compute instances set-service-account circa --zone=us-central1-a \
+  --no-service-account --no-scopes
+gcloud compute instances start circa --zone=us-central1-a
 ```
 
 The trade: `apt`, PyPI and GitHub are unreachable while it runs that way, so
@@ -216,6 +227,26 @@ only port 22 and puts SSH authentication on top of IAP's.
 The web app binds to `127.0.0.1` on purpose. It has no authentication and the
 database holds detailed sleep and cardiovascular data — reach it through the
 tunnel, never by opening a firewall port.
+
+## Who can reach any of this
+
+Worth being able to answer precisely, since it is health data.
+
+| | |
+|---|---|
+| The VM | No external IP, no inbound firewall rule except SSH from IAP's range. Reaching it requires an IAM identity on the project *and* the SSH key registered against it. |
+| The project | One human owner. The rest of the IAM policy is Google's own service agents. |
+| The dashboard | Bound to `127.0.0.1`, so it exists only inside the machine. The tunnel is the only path. |
+| The database | One file, `0640 circa:circa`, on a disk encrypted at rest with a Google-managed key. |
+| Refresh tokens | Fernet-encrypted inside that database, with the key in `/etc/circa/circa.env` (`0640 root:circa`), not in the database itself. |
+| Google Calendar | Circa holds `calendar.app.created`, which cannot read or write any calendar it did not create. It never calls the ACL API, so the calendars it makes stay private to your account. Verified by trying: the ACL read comes back refused. |
+| What leaves the machine | Requests to `health.googleapis.com`, `oauth2.googleapis.com` and `www.googleapis.com`, and events on your own calendars. Nothing else — there is nowhere else it can reach. |
+| The repository | Public, and carries no data: the history was rebuilt from a single commit, and both the tree and every blob were scanned for credentials, coordinates and measurements before it was pushed. |
+
+The honest limit: Google already holds this data — it comes from their Health
+API — and Google hosts the VM and manages the disk-encryption key. "Private"
+here means no third party and no other person, not that it is hidden from
+Google.
 
 ## Operations
 

@@ -43,12 +43,16 @@ class SyncReport:
     updated: int = 0
     unchanged: int = 0
     deleted: int = 0
+    # Events Google held that no longer correspond to a live block. Counted
+    # separately from `deleted`, which is what we knowingly removed - a
+    # non-zero orphan count means something above lost track of an event.
+    orphans_removed: int = 0
     calendars_created: int = 0
     errors: list[str] = field(default_factory=list)
 
     @property
     def changed(self) -> int:
-        return self.created + self.updated + self.deleted
+        return self.created + self.updated + self.deleted + self.orphans_removed
 
 
 def _enabled_categories(settings: RuntimeSettings) -> set[str]:
@@ -198,6 +202,70 @@ def provision(
 # run retried the same delete and logged the same error - sixteen of them per
 # poll, permanently.
 _ALREADY_GONE = {404, 410}
+
+
+def _sweep_orphans(
+    client: CalendarClient,
+    mapping: dict[str, str],
+    wanted: dict[str, Block],
+    tracked: dict[str, str],
+    now: datetime,
+    report: SyncReport,
+) -> int:
+    """Delete every event of ours that no longer corresponds to a live block.
+
+    Runs against what Google reports rather than what we recorded, which is the
+    whole point: it is the only step that can notice an event we have forgotten
+    about.
+    """
+    removed = 0
+    horizon_lo = (now - timedelta(days=60)).isoformat().replace("+00:00", "Z")
+    horizon_hi = (now + timedelta(days=30)).isoformat().replace("+00:00", "Z")
+    for category, calendar_id in mapping.items():
+        try:
+            events = client.list_events(
+                calendar_id, horizon_lo, horizon_hi,
+                private_property=f"app={APP_TAG}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            report.errors.append(f"sweep {category}: {exc}")
+            continue
+        for event in events:
+            private = event.get("extendedProperties", {}).get("private", {})
+            key = private.get("block_key")
+            if not key:
+                continue
+            if key in wanted:
+                # Wanted, but is this the copy we are tracking? A second event
+                # under the same key is a visible duplicate of one block.
+                kept = tracked.get(key)
+                if kept is None or event["id"] == kept:
+                    continue
+            elif _in_progress(event, now):
+                # Not forecast any more but running right now. Removing it out
+                # from under the user mid-block is worse than letting it end.
+                continue
+            try:
+                _delete_event(client, calendar_id, event["id"])
+                removed += 1
+                log.info("gcal.orphan_removed", category=category, block_key=key)
+            except Exception as exc:  # noqa: BLE001
+                report.errors.append(f"orphan {key}: {exc}")
+    return removed
+
+
+def _in_progress(event: dict, now: datetime) -> bool:
+    start, end = event.get("start", {}), event.get("end", {})
+    if "dateTime" not in start or "dateTime" not in end:
+        return False                      # all-day: never "mid-block"
+    try:
+        return (
+            datetime.fromisoformat(start["dateTime"])
+            <= now
+            < datetime.fromisoformat(end["dateTime"])
+        )
+    except ValueError:
+        return False
 
 
 def _delete_event(client, calendar_id: str, event_id: str) -> None:
@@ -530,6 +598,34 @@ def push(
                 report.deleted += 1
             except Exception as exc:  # noqa: BLE001
                 report.errors.append(f"disable {key}: {exc}")
+
+        # --- reconcile against Google, not just against our own record ------
+        #
+        # Everything above decides what to do by comparing intent with the rows
+        # in our database. That is only correct while those rows describe what
+        # Google actually holds, and one lost event id is enough to break it:
+        # the row is rewritten with a new id, the old event is never mentioned
+        # again, and it sits on the calendar forever. Found exactly that - a
+        # stale afternoon dip two days out, its row marked deleted, the event
+        # very much alive under an id nobody was tracking.
+        #
+        # So the last word goes to Google. Anything tagged as ours that is not
+        # wanted, or is wanted under a different id than the one we just wrote,
+        # is an orphan and is removed. This is what stops a mistake anywhere
+        # above from being permanent.
+        if wanted:
+            # The id we believe is live for each wanted key: the one we just
+            # wrote, or - for a block we left alone as unchanged, which never
+            # reaches `writes` - the one already on record.
+            tracked = {
+                key: meta["event_id"] for key, meta in writes.items() if meta["event_id"]
+            }
+            for key, meta in stored.items():
+                if key in wanted and key not in tracked and meta["google_event_id"]:
+                    tracked[key] = meta["google_event_id"]
+            report.orphans_removed += _sweep_orphans(
+                client, mapping, wanted, tracked, now, report
+            )
 
         # --- write results back -------------------------------------------
         for key, meta in writes.items():

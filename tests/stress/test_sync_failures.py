@@ -402,3 +402,104 @@ def test_a_real_delete_failure_is_still_reported(db):
         report = push(s, [_block("focus:peak_focus:new", hours_ahead=3)],
                       RuntimeSettings(), client=client)
     assert report.errors
+
+
+# --- events Circa has lost track of ------------------------------------------
+
+
+def test_an_event_whose_id_we_lost_is_still_removed(db):
+    """Found on the live calendar: a stale afternoon dip two days out, its row
+    marked deleted, the event very much alive under an id nobody was tracking.
+
+    Everything else decides what to do by comparing intent against our own
+    database, which is only correct while those rows describe what Google holds.
+    One lost id breaks that permanently - the row is rewritten, the old event is
+    never mentioned again, and it sits there forever.
+    """
+    from circa.gcal.sync import push
+    from circa.settings_store import RuntimeSettings
+    from tests.test_calendar_sync import FakeCalendarClient, _block, _key
+
+    client = FakeCalendarClient()
+    settings = RuntimeSettings()
+    key = _key("focus", "peak_focus")
+
+    with db() as s:
+        push(s, [_block(key)], settings, client=client)
+    live = [e for e in client.events.values()]
+    assert len(live) == 1
+    calendar_id = live[0]["calendar"]
+
+    # Simulate the loss: a second event for the same block exists on Google,
+    # and our record points only at the first.
+    body = dict(live[0]["body"])
+    orphan_id = client.insert_event(calendar_id, body)["id"]
+    assert len(client.events) == 2
+
+    with db() as s:
+        report = push(s, [_block(key)], settings, client=client)
+
+    assert report.orphans_removed == 1, f"the duplicate survived: {report}"
+    assert orphan_id not in client.events
+    assert len(client.events) == 1
+
+
+def test_an_orphan_for_a_block_that_is_no_longer_wanted_is_removed(db):
+    """The other half: an event we forgot about whose block is gone entirely.
+    Nothing in the local reconcile will ever mention it again."""
+    from circa.gcal.sync import push
+    from circa.settings_store import RuntimeSettings
+    from tests.test_calendar_sync import FakeCalendarClient, _block, _key
+
+    client = FakeCalendarClient()
+    settings = RuntimeSettings()
+    keep = _key("focus", "peak_focus")
+
+    with db() as s:
+        push(s, [_block(keep)], settings, client=client)
+    calendar_id = next(iter(client.events.values()))["calendar"]
+
+    # An event tagged as ours for a block that is not in this run at all, and
+    # that our database has never heard of.
+    stale = dict(next(iter(client.events.values()))["body"])
+    stale["extendedProperties"] = {
+        "private": {**stale["extendedProperties"]["private"],
+                    "block_key": "focus:circadian_dip:2020-01-01"}
+    }
+    client.insert_event(calendar_id, stale)
+
+    with db() as s:
+        report = push(s, [_block(keep)], settings, client=client)
+
+    assert report.orphans_removed == 1, f"the stale event survived: {report}"
+    assert len(client.events) == 1
+
+
+def test_the_sweep_leaves_a_block_that_is_running_right_now(db):
+    """Deleting an event out from under someone mid-block is worse than letting
+    it finish, even when the model has stopped offering it."""
+    from datetime import UTC, datetime, timedelta
+
+    from circa.gcal.blocks import Block
+    from circa.gcal.sync import push
+    from circa.settings_store import RuntimeSettings
+    from tests.test_calendar_sync import FakeCalendarClient, _block, _key
+
+    client = FakeCalendarClient()
+    settings = RuntimeSettings()
+    now = datetime.now(UTC)
+    running = Block(
+        key=_key("focus", "circadian_dip"), category="focus", kind="circadian_dip",
+        start=now - timedelta(minutes=30), end=now + timedelta(minutes=30),
+        title="Afternoon dip", description="why",
+    )
+    with db() as s:
+        push(s, [running], settings, client=client)
+    assert len(client.events) == 1
+
+    # It is no longer offered, but it is still happening.
+    with db() as s:
+        report = push(s, [_block(_key("focus", "peak_focus"))], settings, client=client)
+
+    assert report.orphans_removed == 0, "a block in progress was swept away"
+    assert len(client.events) == 2

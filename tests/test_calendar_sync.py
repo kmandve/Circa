@@ -66,6 +66,28 @@ class FakeCalendarClient:
         self.calls.append(f"patch:{body['extendedProperties']['private']['block_key']}")
         return {"id": event_id}
 
+    def list_events(self, calendar_id, time_min, time_max,
+                    private_property=None, single_events=True):
+        """What Google would report back for this calendar.
+
+        Faithful enough to exercise the orphan sweep, which is the only step
+        that reconciles against Google rather than against our own record - a
+        double that always answered "no events" would let the sweep pass every
+        test without ever doing anything.
+        """
+        self.calls.append(f"list_events:{calendar_id}")
+        out = []
+        for eid, stored in self.events.items():
+            if stored["calendar"] != calendar_id:
+                continue
+            body = stored["body"]
+            if private_property:
+                key, _, value = private_property.partition("=")
+                if body.get("extendedProperties", {}).get("private", {}).get(key) != value:
+                    continue
+            out.append({"id": eid, **body})
+        return out
+
     def delete_event(self, calendar_id, event_id):
         self.events.pop(event_id, None)
         self.calls.append(f"delete:{event_id}")

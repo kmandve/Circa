@@ -319,7 +319,10 @@ def test_the_custom_palette_is_muted_and_distinguishable():
     def rgb(h):
         return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
 
-    active = [CATEGORY_RGB[c][0] for c in ("focus", "sleep", "light", "body")]
+    # Every calendar that is on by default. Debug is excluded because it is not.
+    active = [
+        CATEGORY_RGB[c][0] for c in ("focus", "sleep", "light", "body", "rhythm")
+    ]
     for h in active:
         r, g, b = (c / 255 for c in rgb(h))
         hsv = colorsys.rgb_to_hsv(r, g, b)

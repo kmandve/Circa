@@ -38,8 +38,14 @@ SLEEP = "sleep"
 LIGHT = "light"
 BODY = "body"
 DEBUG = "debug"
+# The day's shape as one all-day bar. Its own calendar rather than a sixth kind
+# of block on Focus: it describes the day the plan blocks sit inside rather than
+# competing for minutes within it, so every invariant Focus has - no two blocks
+# overlapping, actionable lengths, an uncertainty label - is the wrong question
+# to ask of it. Separate also means you can hide it on its own.
+RHYTHM = "rhythm"
 
-CATEGORY_ORDER = [FOCUS, SLEEP, LIGHT, BODY, DEBUG]
+CATEGORY_ORDER = [FOCUS, SLEEP, LIGHT, BODY, RHYTHM, DEBUG]
 
 # Colour ids are Google's *calendarList* palette (1-24), which is not the event
 # palette (1-11) and does not match its names. Verified against the live
@@ -54,6 +60,7 @@ CATEGORY_META = {
     SLEEP: ("Circa · Sleep", "18", "Melatonin onset, wind-down, biological night"),
     LIGHT: ("Circa · Light", "12", "When to seek and avoid light"),
     BODY: ("Circa · Body", "7", "Workout, caffeine cutoff, last meal"),
+    RHYTHM: ("Circa · Rhythm", "22", "The shape of your day, as one all-day bar"),
     DEBUG: ("Circa · Debug", "19", "Phase estimate, credible interval, model version"),
 }
 
@@ -76,6 +83,7 @@ CATEGORY_BACKGROUND = {
     SLEEP: "#C7C3DC",   # lilac
     LIGHT: "#DCDFE3",   # cool grey
     BODY:  "#C3D6C8",   # sage
+    RHYTHM: "#E0C8D2",  # dusty rose - a band behind the day, not a plan item
     DEBUG: "#D9D9D9",   # neutral
 }
 
@@ -119,6 +127,7 @@ CATEGORY_EVENT_COLOUR = {
     SLEEP: "1",   # Lavender
     LIGHT: "8",   # Graphite
     BODY: "8",    # Graphite
+    RHYTHM: "8",  # Graphite
     DEBUG: "8",   # Graphite
 }
 
@@ -152,6 +161,7 @@ CATEGORY_COLOUR_HEX = {
     "12": "#fad165",  # banana - warm gold
     "7": "#42d692",   # eucalyptus - mint green
     "19": "#c2c2c2",  # graphite - grey
+    "22": "#f691b2",  # flamingo - rose, the same family as the hex above
 }
 
 # Categories that survive a low-confidence day under the ROBUST_ONLY policy.
@@ -204,6 +214,11 @@ class Block:
     # from the handle the calendar is reconciled by.
     day: date | None = None
 
+    # Written as a Google all-day event rather than a timed one. `start`/`end`
+    # are still real instants - the sync compares them to decide whether an
+    # event has moved - but the calendar shows the whole day.
+    all_day: bool = False
+
     def __post_init__(self) -> None:
         if self.day is None:
             self.day = _day_from_key(self.key)
@@ -242,6 +257,11 @@ SLEEP_SPAN_KINDS = {"sleep_window"}
 # past: a forecast behind you is clutter, but a record behind you is the point.
 # They carry no uncertainty label, because there is none - the watch measured it.
 RETROSPECTIVE_KINDS = {"sleep_actual"}
+
+# Kinds that are not moments in the day and so never appear in the page's
+# timeline or carry a "right now" headline: the diagnostic block, and the
+# all-day sparkline, which describes the day the others sit inside.
+NON_TIMELINE_KINDS = frozenset({"debug", "rhythm"})
 
 # Forecast kinds that a recorded night replaces once it overlaps them. The
 # wind-down that led into a night is still interesting; the predicted window
@@ -413,6 +433,8 @@ KIND_TITLES = {
     "caffeine_cutoff": "Last coffee",
     "last_meal": "Last meal",
     "debug": "Circa model",
+    # The sparkline is the title, so there is no name to prepend to it.
+    "rhythm": "",
 }
 
 # Calendar titles only. A month grid gives you a few characters and a glance, and
@@ -432,6 +454,9 @@ KIND_EMOJI = {
     "caffeine_cutoff": "☕",
     "last_meal": "🍽️",
     "debug": "🔧",
+    # None: the title is the chart, and a glyph in front of it eats a bar's
+    # worth of width in a month view for no information.
+    "rhythm": "",
 }
 
 
@@ -452,6 +477,9 @@ GROGGINESS_HOURS = 1.5
 # which meant that on a busy day it silently dropped the evening - wind-down and
 # the melatonin rise, the two most actionable things on it.
 KIND_PRIORITY = [
+    # First: it describes the whole day rather than competing for a slot in it,
+    # and it is the one thing readable without opening anything.
+    "rhythm",
     "sleep_actual",
     "sleep_window",
     "melatonin_window",
@@ -813,6 +841,109 @@ def observed_sleep_blocks(
             )
         )
     return blocks
+
+
+# Eight levels, which is all a single row of text can carry - and all it needs
+# to. The shape is the information: a morning peak, an afternoon trough and an
+# evening recovery are recognisable at this resolution, and a calendar title is
+# the one surface that is already on your phone.
+SPARK_BARS = "▁▂▃▄▅▆▇█"
+
+# Roughly half-hourly across a waking day. Wider than this and the title is
+# truncated in a month view before the shape finishes.
+SPARK_SAMPLES = 24
+
+
+def _sparkline(values: list[float], lo: float, hi: float) -> str:
+    span = max(hi - lo, 1e-9)
+    out = []
+    for v in values:
+        f = min(max((v - lo) / span, 0.0), 1.0)
+        out.append(SPARK_BARS[min(int(f * len(SPARK_BARS)), len(SPARK_BARS) - 1)])
+    return "".join(out)
+
+
+def rhythm_block(
+    curve: AlertnessCurve,
+    day: date,
+    settings: RuntimeSettings,
+    conf: Confidence,
+    offset: int,
+) -> list[Block]:
+    """The day's energy curve as a sparkline, written as an all-day event.
+
+    The dashboard draws this properly, but reaching the dashboard means opening
+    a tunnel. The calendar is already synced to every device you own, so the
+    shape of the day can simply be sitting there - no app, no tunnel, and
+    legible without opening the event at all.
+
+    Scaled to the day's own range rather than to 0-100. A real waking day spans
+    something like eight points out of a hundred, so a fixed scale renders every
+    day as an identical flat line; the numbers are in the description instead,
+    where they can be read without being guessed at.
+    """
+    if not settings.enable_rhythm_summary:
+        return []
+
+    # The waking stretch that *began* on this day, not every waking sample that
+    # lands on the date. For anyone who goes to bed after midnight the two are
+    # very different: filtering by date picks up the tail of the previous day's
+    # evening as well, and the sparkline then joins across a night's sleep and
+    # calls the result "12:00am-11:20pm".
+    span = next(
+        (
+            (a, b)
+            for a, b in _awake_spans(curve)
+            if _local(a, offset).date() == day
+        ),
+        None,
+    )
+    if span is None:
+        return []
+    awake = [
+        (t, e)
+        for t, e in zip(curve.times, curve.energy, strict=False)
+        if span[0] <= t <= span[1]
+    ]
+    if len(awake) < SPARK_SAMPLES // 2:
+        return []                      # too little of the day to describe
+
+    step = max(len(awake) // SPARK_SAMPLES, 1)
+    sample = awake[::step][:SPARK_SAMPLES]
+    values = [float(e) for _, e in sample]
+    lo, hi = min(values), max(values)
+    bar = _sparkline(values, lo, hi)
+
+    first, last = sample[0][0], sample[-1][0]
+    peak_t, peak_v = max(sample, key=lambda p: p[1])
+    dip_t, dip_v = min(sample, key=lambda p: p[1])
+    span = f"{_hhmm(first, offset)}–{_hhmm(last, offset)}"
+
+    return [
+        Block(
+            key=f"{RHYTHM}:rhythm:{day.isoformat()}",
+            category=RHYTHM,
+            kind="rhythm",
+            # Real instants so the sync can tell whether the day moved, even
+            # though Google is handed the date.
+            start=first,
+            end=last,
+            day=day,
+            all_day=True,
+            title=f"{bar}  {span}",
+            description="\n\n".join([
+                f"Your predicted energy across {span}, one bar per "
+                f"{max(int((last - first).total_seconds() / 60 / len(sample)), 1)} "
+                "minutes.",
+                f"Highest around {_hhmm(peak_t, offset)} ({peak_v:.0f}/100), "
+                f"lowest around {_hhmm(dip_t, offset)} ({dip_v:.0f}/100).",
+                "The bars are scaled to today's own range, so the shape is "
+                "comparable within a day but not between days - the figures "
+                "above are the ones to read for level.",
+                _confidence_note(conf),
+            ]),
+        )
+    ]
 
 
 def grogginess_blocks(
@@ -1375,10 +1506,16 @@ def _resolve_category_overlaps(
     """
     marker = timedelta(minutes=MARKER_MINUTES)
     by_category: dict[str, list[Block]] = {}
+    # An all-day block is not competing for minutes - it describes the day the
+    # others sit inside. Left in, the day summary spans every focus block on its
+    # calendar and this resolver dutifully collapses them all into it.
+    passthrough = [b for b in blocks if b.all_day]
     for block in blocks:
+        if block.all_day:
+            continue
         by_category.setdefault(block.category, []).append(block)
 
-    out: list[Block] = []
+    out: list[Block] = list(passthrough)
     for items in by_category.values():
         items.sort(key=lambda b: (b.start, b.end))
         for previous, current in zip(items, items[1:], strict=False):
@@ -1487,6 +1624,13 @@ def build_all(
         if settings.enable_light:
             blocks += light_blocks(night, ci, settings, conf, offset)
         blocks += body_blocks(night, ci, settings, conf, offset)
+    # One summary per day the curve actually covers, rather than per anchor -
+    # the sparkline describes a day, and two anchors can touch the same one.
+    for summary_day in sorted({
+        _local(a, offset).date() for a, _ in _awake_spans(curve)
+    }):
+        blocks += rhythm_block(curve, summary_day, settings, conf, offset)
+
     if settings.enable_debug_calendar:
         blocks.append(
             debug_block(dlmo_ts, cbtmin_ts, ci, conf, posterior_detail or {}, offset, settings)

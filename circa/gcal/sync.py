@@ -52,7 +52,7 @@ class SyncReport:
 
 
 def _enabled_categories(settings: RuntimeSettings) -> set[str]:
-    from circa.gcal.blocks import BODY, DEBUG, FOCUS, LIGHT, SLEEP
+    from circa.gcal.blocks import BODY, DEBUG, FOCUS, LIGHT, RHYTHM, SLEEP
 
     enabled = set()
     if settings.enable_focus:
@@ -61,6 +61,8 @@ def _enabled_categories(settings: RuntimeSettings) -> set[str]:
         enabled.add(SLEEP)
     if settings.enable_light:
         enabled.add(LIGHT)
+    if settings.enable_rhythm_summary:
+        enabled.add(RHYTHM)
     if any(
         (settings.enable_caffeine_cutoff, settings.enable_workout_window,
          settings.enable_last_meal)
@@ -226,8 +228,21 @@ def _event_body(
     body: dict = {
         "summary": block.title,
         "description": block.description,
-        "start": {"dateTime": block.start.isoformat(), "timeZone": timezone},
-        "end": {"dateTime": block.end.isoformat(), "timeZone": timezone},
+        # All-day events use `date`, not `dateTime`, and their end date is
+        # exclusive. A day summary is about the day rather than about a span of
+        # minutes within it, so it pins to the top instead of pretending to
+        # occupy time.
+        **(
+            {
+                "start": {"date": block.day.isoformat()},
+                "end": {"date": (block.day + timedelta(days=1)).isoformat()},
+            }
+            if block.all_day
+            else {
+                "start": {"dateTime": block.start.isoformat(), "timeZone": timezone},
+                "end": {"dateTime": block.end.isoformat(), "timeZone": timezone},
+            }
+        ),
         "transparency": "transparent",  # never mark the user busy
         # Explicitly null when the calendars carry real colours, so the event
         # inherits them. An event colorId overrides the calendar it sits on and

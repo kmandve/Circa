@@ -92,6 +92,9 @@ class RuntimeSettings(BaseModel):
     notifications: NotificationPolicy = NotificationPolicy.NONE
     notification_minutes_before: int = Field(default=10, ge=0, le=120)
     forecast_horizon_hours: int = Field(default=48, ge=6, le=168)
+    # The day's energy curve as a sparkline on an all-day event, so the shape of
+    # the day is readable from a phone without reaching the dashboard.
+    enable_rhythm_summary: bool = True
 
     # --- which blocks to generate ----------------------------------------
     enable_focus: bool = True

@@ -107,7 +107,11 @@ def test_blocks_are_internally_well_formed(schedule):
     assert len(keys) == len(set(keys)), "block keys must be unique for idempotency"
     for b in blocks:
         assert b.end > b.start
-        assert (b.end - b.start) <= timedelta(hours=12)
+        # Twelve hours is the bound on a block that claims a span of the day.
+        # The all-day summary spans the waking day by definition, and Google is
+        # handed a date for it rather than these instants.
+        if not b.all_day:
+            assert (b.end - b.start) <= timedelta(hours=12), f"{b.kind} is too long"
         assert b.title.strip() and (b.description or "").strip()
 
 

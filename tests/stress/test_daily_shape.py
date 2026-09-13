@@ -16,7 +16,14 @@ import pytest
 
 from circa.alertness.model import compute, grid
 from circa.alertness.process_s import SleepWakeHistory
-from circa.gcal.blocks import KIND_TITLES, build_all
+from circa.gcal.blocks import (
+    KIND_TITLES,
+    SPARK_BARS,
+    SPARK_SAMPLES,
+    _awake_spans,
+    _local,
+    build_all,
+)
 from circa.phase.confidence import assess
 from circa.settings_store import Chronotype, LowConfidencePolicy, RuntimeSettings
 
@@ -261,13 +268,13 @@ def test_the_afternoon_dip_is_visible_in_the_finished_curve():
 def test_the_page_and_the_calendar_call_things_the_same_name():
     """The hero read "Circadian dip" while the timeline directly beneath it read
     "Afternoon dip", which makes one event look like two."""
-    from circa.gcal.blocks import KIND_TITLES
+    from circa.gcal.blocks import KIND_TITLES, NON_TIMELINE_KINDS
     from circa.web.app import _NOW_HEADLINES
 
     for kind in _NOW_HEADLINES:
         assert kind in KIND_TITLES, f"{kind} has a headline but no calendar title"
     for kind in KIND_TITLES:
-        if kind == "debug":
+        if kind in NON_TIMELINE_KINDS:
             continue
         assert kind in _NOW_HEADLINES, f"{kind} has a calendar title but no headline"
 
@@ -358,17 +365,21 @@ def test_every_calendar_title_carries_its_emoji():
 def test_titles_are_short_enough_for_a_calendar_grid():
     """A month view gives you a few characters before it truncates."""
     for b in _build():
+        # The all-day sparkline is the exception: its title *is* the chart, and
+        # it gets a whole row to itself rather than a slot beside a time.
+        if b.all_day:
+            continue
         base = b.title.split("(")[0].strip()
         assert len(base) <= 22, f"{base!r} is {len(base)} characters"
 
 
 def test_the_web_headline_is_the_title_without_the_emoji():
     """The page has its own SVG icon set; glyphs belong on the calendar only."""
-    from circa.gcal.blocks import KIND_EMOJI, KIND_TITLES
+    from circa.gcal.blocks import KIND_EMOJI, KIND_TITLES, NON_TIMELINE_KINDS
     from circa.web.app import _NOW_HEADLINES
 
     for kind, title in KIND_TITLES.items():
-        if kind == "debug":
+        if kind in NON_TIMELINE_KINDS:
             continue
         assert _NOW_HEADLINES[kind][0] == title, (
             f"{kind}: page says {_NOW_HEADLINES[kind][0]!r}, calendar base is {title!r}"
@@ -609,3 +620,82 @@ def test_no_block_is_keyed_to_a_day_it_does_not_fall_in():
             assert timedelta(0) <= delta < timedelta(hours=36), (
                 f"{b.key} starts {local_start} - {delta} into the day it names"
             )
+
+
+# --- the day's shape, readable without the dashboard -------------------------
+
+
+def test_the_rhythm_summary_is_one_all_day_block_per_day():
+    """The dashboard draws the energy curve properly, but reaching it means
+    opening a tunnel. The calendar is already on every device, so the shape of
+    the day can just be sitting there."""
+    blocks = [b for b in _build(nights=21) if b.kind == "rhythm"]
+    assert blocks, "no rhythm summary generated"
+    assert len({b.day for b in blocks}) == len(blocks), "two summaries for one day"
+    for b in blocks:
+        assert b.all_day, "a day summary that claims a span of hours"
+        assert b.category == "rhythm", "it must not compete with the plan blocks"
+        bars = b.title.split()[0]
+        assert len(bars) == SPARK_SAMPLES
+        assert set(bars) <= set(SPARK_BARS), bars
+
+
+def test_the_sparkline_is_scaled_to_the_day_not_to_zero():
+    """A real waking day spans something like eight points out of a hundred, so
+    a fixed 0-100 scale renders every day as the same flat line. Scaled to its
+    own range, the shape is visible; the numbers live in the description."""
+    blocks = [b for b in _build(nights=21) if b.kind == "rhythm"]
+    bars = blocks[0].title.split()[0]
+    assert SPARK_BARS[0] in bars, "nothing reaches the bottom of the scale"
+    assert SPARK_BARS[-1] in bars, "nothing reaches the top of the scale"
+    assert "/100" in blocks[0].description, "no absolute figures to read"
+
+
+def test_the_sparkline_covers_one_waking_stretch_not_a_calendar_date():
+    """For anyone who goes to bed after midnight the two differ: filtering by
+    date picks up the tail of the previous evening as well, and the line then
+    joins across a night's sleep."""
+    from circa.alertness.model import compute, grid
+    from circa.alertness.process_s import SleepWakeHistory
+    from circa.gcal.blocks import rhythm_block
+
+    # Sleeps at 01:00 local, wakes at 09:00 - so every date has waking samples
+    # at both ends of it.
+    base = datetime(2026, 8, 25, tzinfo=TZ)
+    episodes = [
+        ((base + timedelta(days=d, hours=25)).astimezone(UTC),
+         (base + timedelta(days=d, hours=33)).astimezone(UTC))
+        for d in range(30)
+    ]
+    history = SleepWakeHistory(episodes, NOW - timedelta(days=10),
+                               NOW + timedelta(hours=HORIZON + OVERRUN))
+    times = grid(NOW - timedelta(hours=36), NOW + timedelta(hours=HORIZON + OVERRUN),
+                 minutes=10)
+    curve = compute(times, OFFSET, history, np.full(50, 4.5))
+    conf = assess(21, 95, 0.9, 20)
+
+    spans = {_local(a, OFFSET).date(): (a, b) for a, b in _awake_spans(curve)}
+    day = sorted(spans)[1]
+    blocks = rhythm_block(curve, day, RuntimeSettings(), conf, OFFSET)
+    assert blocks, f"no summary for {day}"
+    b = blocks[0]
+
+    span_start, span_end = spans[day]
+    assert b.start >= span_start and b.end <= span_end
+    # Nothing inside the block's own span may be marked asleep.
+    asleep_inside = [
+        a for t, a in zip(curve.times, curve.asleep, strict=False)
+        if b.start <= t <= b.end and a
+    ]
+    assert not asleep_inside, "the sparkline runs straight through a night's sleep"
+
+
+def test_the_summary_never_eats_the_blocks_it_describes():
+    """It is all-day and sits on the same day as everything else, so an overlap
+    resolver that treats it as a timed block collapses the entire day into it -
+    which is exactly what happened the first time it shared the Focus
+    calendar."""
+    blocks = _build(nights=21)
+    kinds = {b.kind for b in blocks}
+    for essential in ("peak_focus", "circadian_dip", "second_wind"):
+        assert essential in kinds, f"{essential} was swallowed by the summary"

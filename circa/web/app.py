@@ -42,7 +42,7 @@ from circa.db.models import (
     SyncState,
 )
 from circa.db.session import session_scope
-from circa.gcal.blocks import RETROSPECTIVE_KINDS
+from circa.gcal.blocks import NON_TIMELINE_KINDS, RETROSPECTIVE_KINDS
 from circa.gcal.sync import calendar_colours_permitted
 from circa.settings_store import (
     Chronotype,
@@ -435,6 +435,10 @@ def _today_context() -> dict:
                 .order_by(CalendarBlock.start_ts)
             )
         )
+        # The sparkline exists so the day's shape is readable from a phone
+        # without reaching this page. On the page it would be a worse copy of
+        # the chart directly above it.
+        blocks = [b for b in blocks if b.kind not in NON_TIMELINE_KINDS]
         block_rows = [
             {
                 "category": b.category,

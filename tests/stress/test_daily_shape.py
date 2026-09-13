@@ -763,3 +763,33 @@ def test_every_cell_in_the_colour_chart_has_content_and_a_visible_colour():
         assert min(255 - r, 255 - g, 255 - b) >= 8, (
             f"{colour} is too close to white to read as a filled cell"
         )
+
+
+def test_the_quietest_hour_still_draws_a_bar():
+    """Scaling straight from the day's minimum to its maximum gives the lowest
+    hour a bar of length zero. So the quietest hour - usually the one you most
+    want to see coming - rendered as an empty row with a number beside it, and
+    read as broken rather than as low."""
+    from circa.gcal.blocks import _bar_units
+
+    for lo, hi, height in ((67.0, 87.0, 14), (40.0, 95.0, 6), (79.9, 80.1, 14)):
+        span = max(hi - lo, 1e-9)
+        assert round(_bar_units(lo, lo, span, height)) >= 1, "the minimum drew nothing"
+        assert round(_bar_units(hi, lo, span, height)) == height, "the maximum was clipped"
+
+    blocks = [b for b in _build(nights=21) if b.kind == "rhythm"]
+    text = blocks[0].description
+    rows = [line for line in text.split("<br>") if "·" in line or "█" in line]
+    assert rows, "no text chart rendered"
+    for row in rows:
+        assert "█" in row, f"an hour drew no bar at all: {row!r}"
+
+
+def test_the_bottom_row_of_the_colour_chart_is_never_empty():
+    """Same rule in the grid: with the minimum scaled to zero, its column was
+    entirely track colour, and the bottom row had a hole in it."""
+    blocks = [b for b in _build(nights=21) if b.kind == "rhythm"]
+    grid = blocks[0].description[:blocks[0].description.index("</table>")]
+    rows = grid.split("<tr>")[1:]
+    bottom = rows[-2]                       # last is the row of hour labels
+    assert "#E7E1DB" not in bottom, "the bottom row of the chart has a gap in it"

@@ -966,6 +966,19 @@ GRID_INK = "#E9A178"
 GRID_TRACK = "#E7E1DB"
 
 
+def _bar_units(value: float, lo: float, span: float, height: int) -> float:
+    """How much of a bar to fill, on a scale that never bottoms out at nothing.
+
+    Scaling straight from the day's minimum to its maximum gives the lowest hour
+    a bar of length zero - so the quietest hour of the day, which is usually the
+    one you most want to see coming, rendered as an empty row with a number
+    beside it and looked broken. The floor is one unit: the lowest hour is still
+    a level, not an absence.
+    """
+    fraction = (value - lo) / span
+    return 1.0 + fraction * (height - 1)
+
+
 def _hourly(awake: list[tuple[datetime, float]], offset: int) -> list[tuple[datetime, float]]:
     buckets: dict[datetime, list[float]] = {}
     for t, e in awake:
@@ -986,7 +999,7 @@ def _grid_chart(hourly: list[tuple[datetime, float]], offset: int) -> str:
     for r in range(GRID_ROWS, 0, -1):
         cells = "".join(
             f'<td bgcolor="'
-            f'{GRID_INK if (v - lo) / span * GRID_ROWS >= r - 0.5 else GRID_TRACK}"'
+            f'{GRID_INK if _bar_units(v, lo, span, GRID_ROWS) >= r - 0.5 else GRID_TRACK}"'
             # &nbsp;, not an empty cell. The probe showed `height` is ignored, so
             # a cell with no content has nothing to give it height and collapses -
             # taking its whole row with it.
@@ -1018,7 +1031,7 @@ def _hour_rows(hourly: list[tuple[datetime, float]], offset: int) -> str:
     width = 14
     lines = []
     for t, v in hourly:
-        filled = round((v - lo) / span * width)
+        filled = round(_bar_units(v, lo, span, width))
         clock = t.strftime("%-I%p").lower().replace("am", "a").replace("pm", "p")
         lines.append(f"{clock:>4} {'█' * filled}{'·' * (width - filled)} {v:.0f}")
     return '<font face="monospace">' + "<br>".join(lines) + "</font><br>"

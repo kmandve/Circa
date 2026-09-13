@@ -31,7 +31,11 @@ log = structlog.get_logger(__name__)
 
 # How far behind the current moment the alertness curve is computed. Enough
 # to cover the whole of the current local day from any hour of it.
-CURVE_LOOKBACK_HOURS = 24
+# Far enough back that the anchor which began the current circadian day still
+# has its whole block set inside the curve - an anchor is only usable when it
+# does. Yesterday evening's DLMO is up to 26 hours back, and its blocks start
+# ~4 hours before it.
+CURVE_LOOKBACK_HOURS = 36
 
 # How far past the forecast horizon the curve is computed, so that a phase
 # anchor landing near the end of the horizon still has a full day of curve

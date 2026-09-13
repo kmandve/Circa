@@ -1304,6 +1304,17 @@ def _clip_to_wake(
 _ANCHOR_SPAN_BEFORE_HOURS = 4.0
 _ANCHOR_SPAN_AFTER_HOURS = 20.0
 
+# How far back to look for an anchor, which is a different question from how far
+# a block set reaches around one. The day you are awake in was begun by last
+# night's DLMO, up to about 26 hours ago by late evening - so an anchor lookback
+# of a few hours can only ever build the day ahead, never the one you are in.
+#
+# It did not show while the calendar wrote two days ahead: this morning's blocks
+# were put up last night as "tomorrow", and were simply already there when
+# morning came. Keeping a single circadian day removes that, and the lookback
+# has to cover the day itself instead.
+_ANCHOR_LOOKBACK_HOURS = 30.0
+
 
 def _phase_anchors(
     dlmo_ts: datetime,
@@ -1327,7 +1338,8 @@ def _phase_anchors(
     """
     before = timedelta(hours=_ANCHOR_SPAN_BEFORE_HOURS)
     after = timedelta(hours=_ANCHOR_SPAN_AFTER_HOURS)
-    window_start, window_end = from_ts - before, to_ts
+    window_start = from_ts - timedelta(hours=_ANCHOR_LOOKBACK_HOURS)
+    window_end = to_ts
     if covered is not None:
         window_start = max(window_start, covered[0] + before)
         window_end = min(window_end, covered[1] - after)

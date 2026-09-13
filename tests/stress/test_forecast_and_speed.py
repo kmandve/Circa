@@ -259,11 +259,17 @@ def test_the_curve_is_expressed_in_the_users_own_timezone(db):
     first = datetime.fromisoformat(payload["points"][0]["t"])
     last = datetime.fromisoformat(payload["points"][-1]["t"])
     span = (last - first).total_seconds() / 3600
-    assert 80 < span < 110, f"curve spans {span:.1f}h"
+    assert 80 < span < 125, f"curve spans {span:.1f}h"
 
-    # Read literally, the first point is the user's wall clock a day before the
-    # run - not the same instant expressed in UTC.
-    expected = (NOW - timedelta(hours=24) + timedelta(seconds=offset)).replace(tzinfo=None)
+    # Read literally, the first point is the user's wall clock at the start of
+    # the curve's lookback - not the same instant expressed in UTC. Derived from
+    # the constant rather than repeating it, because the lookback grew when the
+    # calendar started having to build the day you are already in.
+    from circa.pipeline import CURVE_LOOKBACK_HOURS
+
+    expected = (
+        NOW - timedelta(hours=CURVE_LOOKBACK_HOURS) + timedelta(seconds=offset)
+    ).replace(tzinfo=None)
     drift = abs((first.replace(tzinfo=None) - expected).total_seconds())
     assert drift < 3600, f"first point is {drift / 60:.0f} min from the expected wall clock"
 

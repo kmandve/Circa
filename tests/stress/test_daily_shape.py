@@ -285,12 +285,23 @@ def test_the_cap_keeps_the_important_blocks_not_the_early_ones():
     """It used to truncate by start time, so a busy day silently lost its
     evening - the wind-down and the melatonin rise, which are the two most
     actionable things on it."""
-    blocks = _build(settings=RuntimeSettings(max_blocks_per_day=5))
-    by_day: dict = {}
-    for b in blocks:
-        by_day.setdefault(_local_day(b), []).append(b)
+    # Pick the day the cap actually bites on, which is the busiest day *before*
+    # capping. Choosing it afterwards picks whichever day happens to hold five
+    # blocks, and the partial day at the edge of the horizon holds five without
+    # anything having been dropped - so the assertion below would pass without
+    # ever exercising the cap.
+    def grouped(blocks):
+        out: dict = {}
+        for b in blocks:
+            out.setdefault(_local_day(b), []).append(b)
+        return out
 
-    busiest = max(by_day.values(), key=len)
+    uncapped = grouped(_build(settings=RuntimeSettings(max_blocks_per_day=50)))
+    day = max(uncapped, key=lambda d: len(uncapped[d]))
+    assert len(uncapped[day]) > 5, "nothing to cap - the fixture changed"
+
+    capped = grouped(_build(settings=RuntimeSettings(max_blocks_per_day=5)))
+    busiest = capped[day]
     assert len(busiest) <= 5
     kinds = {b.kind for b in busiest}
     # Whatever survives, it must not be "the first five things that happened".

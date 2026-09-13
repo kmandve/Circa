@@ -46,8 +46,10 @@ from    720 hours: $0.005000
 
 720 hours is exactly one always-on address for a 30-day month. So one VM with
 one IP is free in 30-day months and costs **$0.12 in 31-day months** (24 hours
-over the tier at half a cent each). February is well under. Budget accordingly:
-this is the only line that will ever appear.
+over the tier at half a cent each). February is well under. This is the only
+line that will ever appear — and if even that bothers you, see
+[dropping the external IP](#going-from-012-to-000-drop-the-external-ip),
+which takes it to exactly zero.
 
 A billing account with a card must be on file even for Always Free. Set a
 **$1 budget alert** at <https://console.cloud.google.com/billing/budgets> so any
@@ -151,16 +153,69 @@ sudo systemctl start circa
 sudo -u circa /opt/circa/.venv/bin/circa doctor
 ```
 
+## Going from $0.12 to $0.00: drop the external IP
+
+The 12 cents is the IP. Remove it and there is nothing left to bill. Circa only
+ever contacts `health.googleapis.com`, `oauth2.googleapis.com` and
+`www.googleapis.com` at runtime — `accounts.google.com` appears in the source
+but only as a URL handed to your browser, never fetched by the VM — so
+**Private Google Access** covers the whole of normal operation, for free.
+
+Do these in order. Removing the IP before IAP works will lock you out.
+
+```bash
+# 1. Let the subnet reach Google APIs without an external address.
+gcloud compute networks subnets update default --region=us-central1 \
+  --enable-private-ip-google-access
+
+# 2. Allow SSH from IAP's forwarding range.
+gcloud compute firewall-rules create allow-ssh-from-iap \
+  --network=default --direction=INGRESS --action=allow \
+  --rules=tcp:22 --source-ranges=35.235.240.0/20
+
+# 3. Prove it works *while you still have the IP as a fallback*.
+gcloud compute ssh circa --zone=us-central1-a --tunnel-through-iap \
+  --command='echo ok'
+
+# 4. Only now, remove the address.
+gcloud compute instances delete-access-config circa \
+  --zone=us-central1-a --access-config-name="external-nat"
+
+# 5. And drop the rules the default VPC opens to the whole internet.
+gcloud compute firewall-rules delete default-allow-ssh default-allow-rdp
+```
+
+The trade: `apt`, PyPI and GitHub are unreachable while it runs that way, so
+the VM gets no security updates on its own. Lend it an address when you want to
+update, and take it back afterwards — an hour costs half a cent, and only in a
+month that already passed 720 hours:
+
+```bash
+gcloud compute instances add-access-config circa --zone=us-central1-a \
+  --access-config-name="external-nat" --network-tier=STANDARD
+# ... apt upgrade, git pull, uv pip install -e ".[science]", systemctl restart ...
+gcloud compute instances delete-access-config circa --zone=us-central1-a \
+  --access-config-name="external-nat"
+```
+
+Worth doing monthly. An internet-unreachable box is a much smaller target than
+an exposed one, but an unpatched kernel is still an unpatched kernel.
+
 ## Reaching the dashboard
 
 ```bash
-gcloud compute ssh circa --zone=us-central1-a -- -L 8720:localhost:8720
+gcloud compute ssh circa --zone=us-central1-a --tunnel-through-iap \
+  -- -N -L 8720:localhost:8720
 # then open http://localhost:8720
 ```
 
+Forwarded over SSH rather than tunnelling 8720 with IAP directly: that would
+need the firewall opened to the entire IAP range on 8720, whereas this needs
+only port 22 and puts SSH authentication on top of IAP's.
+
 The web app binds to `127.0.0.1` on purpose. It has no authentication and the
-database holds detailed sleep and cardiovascular data — reach it through an SSH
-tunnel, not an open firewall port.
+database holds detailed sleep and cardiovascular data — reach it through the
+tunnel, never by opening a firewall port.
 
 ## Operations
 

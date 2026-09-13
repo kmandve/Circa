@@ -19,8 +19,6 @@ from circa.alertness.model import compute, grid
 from circa.alertness.process_s import SleepWakeHistory
 from circa.gcal.blocks import (
     KIND_TITLES,
-    SPARK_BARS,
-    SPARK_SAMPLES,
     _awake_spans,
     _local,
     build_all,
@@ -636,19 +634,17 @@ def test_the_rhythm_summary_is_one_all_day_block_per_day():
     for b in blocks:
         assert b.all_day, "a day summary that claims a span of hours"
         assert b.category == "rhythm", "it must not compete with the plan blocks"
-        bars = b.title.split()[0]
-        assert len(bars) == SPARK_SAMPLES
-        assert set(bars) <= set(SPARK_BARS), bars
 
 
-def test_the_sparkline_is_scaled_to_the_day_not_to_zero():
+def test_the_chart_is_scaled_to_the_day_not_to_zero():
     """A real waking day spans something like eight points out of a hundred, so
     a fixed 0-100 scale renders every day as the same flat line. Scaled to its
-    own range, the shape is visible; the numbers live in the description."""
+    own range the shape is visible, and the absolute figures are written out."""
     blocks = [b for b in _build(nights=21) if b.kind == "rhythm"]
-    bars = blocks[0].title.split()[0]
-    assert SPARK_BARS[0] in bars, "nothing reaches the bottom of the scale"
-    assert SPARK_BARS[-1] in bars, "nothing reaches the top of the scale"
+    rows = [r for r in blocks[0].description.split("<br>") if "█" in r or "·" in r]
+    assert any("·" in r for r in rows), "no row falls short of full"
+    assert any(r.rstrip().endswith(tuple("0123456789")) and "·" not in r
+               for r in rows), "no row reaches the top of the scale"
     assert "/100" in blocks[0].description, "no absolute figures to read"
 
 
@@ -735,11 +731,27 @@ def test_the_description_carries_the_times_and_the_numbers():
     assert "/100" in html, "no absolute figures"
 
 
-def test_the_title_is_short_enough_for_a_phones_all_day_row():
-    """It overflowed, and the half that got cut was the chart."""
+def test_the_title_is_a_name_rather_than_a_chart():
+    """It overflowed the all-day row, and block characters do not render
+    reliably in a title anyway - the heights collapse, so a sparkline there
+    comes out as a run of identical marks rather than a shape."""
+    from circa.gcal.blocks import SPARK_BARS_FORBIDDEN_IN_TITLES
+
     for b in _build(nights=21):
         if b.kind == "rhythm":
-            assert len(b.title) <= 24, f"{b.title!r} is {len(b.title)} characters"
+            assert len(b.title) <= 16, f"{b.title!r} is {len(b.title)} characters"
+            assert not set(b.title) & SPARK_BARS_FORBIDDEN_IN_TITLES, b.title
+
+
+def test_the_todoist_sync_times_are_on_the_day_summary():
+    """Not performed by Circa - it runs as a separate recurring task on the same
+    calendar - but the times belong where you look to find out what a day
+    holds."""
+    blocks = [b for b in _build(nights=21) if b.kind == "rhythm"]
+    text = blocks[0].description
+    for when in ("9:30am", "1:00pm", "4:00pm", "6:30pm"):
+        assert when in text, f"{when} missing from the day summary"
+    assert "not part of Circa" in text, "it must not read as something Circa does"
 
 
 def test_every_cell_in_the_colour_chart_has_content_and_a_visible_colour():

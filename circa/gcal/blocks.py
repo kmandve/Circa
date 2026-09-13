@@ -433,8 +433,7 @@ KIND_TITLES = {
     "caffeine_cutoff": "Last coffee",
     "last_meal": "Last meal",
     "debug": "Circa model",
-    # The sparkline is the title, so there is no name to prepend to it.
-    "rhythm": "",
+    "rhythm": "Rhythm",
 }
 
 # Calendar titles only. A month grid gives you a few characters and a glance, and
@@ -454,9 +453,7 @@ KIND_EMOJI = {
     "caffeine_cutoff": "☕",
     "last_meal": "🍽️",
     "debug": "🔧",
-    # None: the title is the chart, and a glyph in front of it eats a bar's
-    # worth of width in a month view for no information.
-    "rhythm": "",
+    "rhythm": "📊",
 }
 
 
@@ -843,24 +840,15 @@ def observed_sleep_blocks(
     return blocks
 
 
-# Eight levels, which is all a single row of text can carry - and all it needs
-# to. The shape is the information: a morning peak, an afternoon trough and an
-# evening recovery are recognisable at this resolution, and a calendar title is
-# the one surface that is already on your phone.
-SPARK_BARS = "▁▂▃▄▅▆▇█"
-
-# Roughly half-hourly across a waking day. Wider than this and the title is
-# truncated in a month view before the shape finishes.
+# How much of the waking day to sample for the chart. Roughly half-hourly, which
+# is fine enough to show the shape and coarse enough that the description stays
+# readable on a phone.
 SPARK_SAMPLES = 24
 
-
-def _sparkline(values: list[float], lo: float, hi: float) -> str:
-    span = max(hi - lo, 1e-9)
-    out = []
-    for v in values:
-        f = min(max((v - lo) / span, 0.0), 1.0)
-        out.append(SPARK_BARS[min(int(f * len(SPARK_BARS)), len(SPARK_BARS) - 1)])
-    return "".join(out)
+# Block characters belong in the description, never in a title: Google renders a
+# title in a face where their heights collapse, so a sparkline there is a run of
+# identical marks rather than a shape.
+SPARK_BARS_FORBIDDEN_IN_TITLES = frozenset("▁▂▃▄▅▆▇█")
 
 
 def rhythm_block(
@@ -910,10 +898,6 @@ def rhythm_block(
 
     step = max(len(awake) // SPARK_SAMPLES, 1)
     sample = awake[::step][:SPARK_SAMPLES]
-    values = [float(e) for _, e in sample]
-    lo, hi = min(values), max(values)
-    bar = _sparkline(values, lo, hi)
-
     first, last = sample[0][0], sample[-1][0]
     peak_t, peak_v = max(sample, key=lambda p: p[1])
     dip_t, dip_v = min(sample, key=lambda p: p[1])
@@ -931,17 +915,21 @@ def rhythm_block(
             end=last,
             day=day,
             all_day=True,
-            # Title only - the span moved into the description, because on a
-            # phone the all-day row truncates and the chart is the half worth
-            # keeping.
-            title=bar,
+            # A name, not a chart. Block characters do not render reliably in
+            # an event title - the heights collapse, so a sparkline there comes
+            # out as a run of identical marks rather than a shape. The chart
+            # lives in the description, where a table and a monospace face both
+            # render properly and it has room to carry its own hours.
+            title=label("rhythm"),
             description="".join([
                 _grid_chart(hourly, offset),
                 _hour_rows(hourly, offset),
-                f"<br>Highest around {_hhmm(peak_t, offset)} "
+                f"<br>{span}. Highest around {_hhmm(peak_t, offset)} "
                 f"({peak_v:.0f}/100), lowest around {_hhmm(dip_t, offset)} "
                 f"({dip_v:.0f}/100). Bars are scaled to the day's own range, so "
-                "the shape is comparable within a day but not between days.<br><br>",
+                "the shape is comparable within a day but not between days."
+                "<br><br>",
+                TODOIST_NOTE,
                 _confidence_note(conf).replace("\n", "<br>"),
             ]),
         )
@@ -958,6 +946,15 @@ def rhythm_block(
 #
 # So: a grid of equal cells coloured to make a bar chart, and beneath it a
 # monospace table which carries the times and the numbers and survives anywhere.
+# Carried on the day summary because it is the one Circa event that is about
+# the day as a whole. Nothing in Circa performs this sync - it runs as a
+# separate recurring task on the same calendar - but the times belong somewhere
+# you will see them, and this is where you look to find out what a day holds.
+TODOIST_NOTE = (
+    "Todoist tasks sync to this calendar at 9:30am, 1:00pm, 4:00pm and 6:30pm "
+    "Central. That sync is not part of Circa.<br><br>"
+)
+
 GRID_ROWS = 6
 GRID_INK = "#E9A178"
 # Visible, not near-white. The first version used #F3EBE4, which against a white

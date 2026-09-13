@@ -125,18 +125,27 @@ def provision(
     by_summary: dict[str, list[dict]] = {}
     for cal in client.list_calendars():
         by_summary.setdefault(cal.get("summary"), []).append(cal)
-    remote = {
-        summary: min(cals, key=lambda c: c["id"])
-        for summary, cals in by_summary.items()
-    }
-    duplicates = [
-        cal
-        for summary, cals in by_summary.items()
-        if summary in {meta[0] for meta in CATEGORY_META.values()} and len(cals) > 1
-        for cal in cals
-        if cal["id"] != remote[summary]["id"]
-        and cal["id"] not in set(existing_local.values())
-    ]
+
+    # The survivor is the one Circa already has on record, because that is the
+    # one holding your events. Only when none of them is on record does it fall
+    # back to a stable choice. Picking the lowest id unconditionally chose the
+    # orphan, and the guard against deleting a tracked calendar then correctly
+    # refused - so nothing happened at all, which is the worst of both.
+    tracked_ids = {cid for cid in existing_local.values() if cid}
+    ours = {meta[0] for meta in CATEGORY_META.values()}
+    remote: dict[str, dict] = {}
+    duplicates: list[dict] = []
+    for summary, cals in by_summary.items():
+        keep = next(
+            (c for c in cals if c["id"] in tracked_ids),
+            min(cals, key=lambda c: c["id"]),
+        )
+        remote[summary] = keep
+        if summary in ours:
+            duplicates += [
+                c for c in cals
+                if c["id"] != keep["id"] and c["id"] not in tracked_ids
+            ]
 
     mapping: dict[str, str] = {}
     created: dict[str, tuple[str, str]] = {}

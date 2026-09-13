@@ -565,3 +565,8 @@ def test_deduplication_never_removes_the_calendar_in_use(db):
         provision(s, client, settings)
 
     assert tracked <= set(client.calendars), "a calendar in use was deleted"
+    # And the duplicates are actually gone - the first attempt kept the wrong
+    # one, was blocked from deleting the tracked calendar, and so did nothing.
+    for summary in ("Circa · Rhythm", "Circa · Focus"):
+        assert sum(1 for c in client.calendars.values()
+                   if c["summary"] == summary) == 1, f"{summary} still doubled"

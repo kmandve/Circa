@@ -132,3 +132,85 @@ def test_cbtmin_stays_inside_the_night_it_describes(poll_hour):
     cbt = _local_hour_after(4.4, dlmo, OFFSET)
     gap = (cbt - dlmo).total_seconds() / 3600
     assert 4.0 <= gap <= 10.0, f"CBTmin {gap:+.1f}h from its own DLMO"
+
+
+# --- a spent forecast must leave the calendar --------------------------------
+
+
+def _marker(key: str, kind: str, starts_in_hours: float, minutes: int = 15):
+    """A short marker - the shape the start-anchored window got wrong."""
+    from datetime import UTC, datetime, timedelta
+
+    from circa.gcal.blocks import Block
+
+    start = datetime.now(UTC) + timedelta(hours=starts_in_hours)
+    return Block(
+        key=key, category="light", kind=kind,
+        start=start, end=start + timedelta(minutes=minutes),
+        title="Dim lights", description="why",
+    )
+
+
+def test_a_short_marker_is_gone_once_it_has_passed(db):
+    """Found on the live calendar: "Dim lights" runs for fifteen minutes and was
+    still sitting there an hour and a quarter after it ended.
+
+    The window kept any forecast whose *start* was within the last two hours, so
+    the shorter the block the longer it outlived itself.
+    """
+    from circa.gcal.sync import push
+    from circa.settings_store import RuntimeSettings
+    from tests.test_calendar_sync import FakeCalendarClient
+
+    client = FakeCalendarClient()
+    settings = RuntimeSettings()
+
+    # Write it while it is still ahead.
+    with db() as s:
+        push(s, [_marker("light:dim_light:a", "dim_light", 0.25)], settings, client=client)
+    assert len(client.events) == 1
+
+    # An hour later it has been over for 45 minutes, and the model no longer
+    # offers it. It must not survive on the strength of having started recently.
+    spent = _marker("light:dim_light:a", "dim_light", -1.0)
+    live = _marker("light:dim_light:b", "dim_light", 3.0)
+    with db() as s:
+        report = push(s, [spent, live], settings, client=client)
+
+    assert report.deleted == 1, f"spent marker kept: {report}"
+    remaining = [e for e in client.events.values() if not e.get("deleted")]
+    assert len(remaining) == 1
+
+
+def test_a_long_block_still_in_progress_is_kept_and_refreshed(db):
+    """The other half of the same rule. A sleep window is eight hours long, so a
+    two-hour grace measured from its start dropped it out of the refresh in the
+    middle of the night it described - present on the calendar, but no longer
+    tracking the model."""
+    from datetime import UTC, datetime, timedelta
+
+    from circa.gcal.blocks import Block
+    from circa.gcal.sync import push
+    from circa.settings_store import RuntimeSettings
+    from tests.test_calendar_sync import FakeCalendarClient
+
+    client = FakeCalendarClient()
+    settings = RuntimeSettings()
+    started = datetime.now(UTC) - timedelta(hours=4)
+
+    def night(title: str) -> Block:
+        return Block(
+            key="sleep:sleep_window:a", category="sleep", kind="sleep_window",
+            start=started, end=started + timedelta(hours=8),
+            title=title, description="why",
+        )
+
+    with db() as s:
+        push(s, [night("Sleep")], settings, client=client)
+    with db() as s:
+        report = push(s, [night("Sleep (revised)")], settings, client=client)
+
+    assert report.deleted == 0, "an in-progress night was dropped"
+    assert report.updated == 1, "an in-progress night stopped tracking the model"
+    body = next(iter(client.events.values()))["body"]
+    assert body["summary"] == "Sleep (revised)"

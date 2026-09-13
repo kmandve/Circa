@@ -289,14 +289,19 @@ def push(
         # already passed is clutter, but a record of it is the half of the
         # picture the calendar was missing entirely.
         history_start = now - timedelta(days=max(settings.history_days, 0))
-        forecast_start = now - timedelta(hours=2)
 
         def _in_window(block: Block) -> bool:
             if block.start > window_end:
                 return False
             if block.kind in RETROSPECTIVE_KINDS:
                 return block.start >= history_start
-            return block.start >= forecast_start
+            # A forecast is worth keeping until it has finished, which is a
+            # statement about its end, not its start. Anchored on the start with
+            # a two-hour grace, "Dim lights" - fifteen minutes long - sat on the
+            # calendar for an hour and three quarters after it was spent, while
+            # an eight-hour sleep block fell out of the refresh two hours in and
+            # went stale halfway through the night it described.
+            return block.end > now
 
         wanted = {b.key: b for b in blocks if _in_window(b)}
 
